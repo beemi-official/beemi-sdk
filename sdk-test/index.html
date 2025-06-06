@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Beemi SDK Browser Test</title>
+</head>
+<body>
+    <h1>Beemi SDK Browser Test</h1>
+    <p>Open DevTools and run: <code>beemi.emit('chat', {text:'spider man'})</code></p>
+    <div id="output"></div>
+
+    <script type="module" src="../beemi-sdk-0.1.js"></script>
+    <script type="module">
+      import { on } from '../beemi-sdk-0.1.js';
+      on('chat', m => document.body.innerText += '\n' + m.text);
+    </script>
+</body>
+</html> 

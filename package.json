@@ -1,0 +1,16 @@
+{
+  "name": "beemi-sdk",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "beemi-sdk-0.1.js",
+  "scripts": {
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}
