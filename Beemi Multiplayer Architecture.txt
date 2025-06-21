@@ -1,0 +1,477 @@
+﻿1 · Overview of the multiplayer stack
+pgsql
+CopyEdit
+┌──────────────┐       ┌────────────┐
+│  Beemi app   │──────▶│Beemi server│◀─────┐
+└──────────────┘       └────────────┘      │
+        ▲                    ▲             │
+        │ Web-view           │ Real-time   │
+        │ (Beemi game)       │ channels    │
+        │                    │             │
+        └──────SDK───────────┘             │
+                 ▲                         │
+                 └─────────────────────────┘
+
+
+The Beemi server provides generic multiplayer primitives; it never inspects game data.
+The Beemi SDK exposes those primitives to any HTML/JS bundle.
+The Beemi app supplies store-front, room UI, deep-links and a sandboxed Web-view that loads the game.
+Beemi games are self-contained bundles that rely solely on the SDK.
+________________
+
+
+2 · Beemi server - functional modules (game-agnostic)
+Module
+	Behaviour & interfaces
+	Internal state
+	Room Registry
+	• “Create room”, “join next”, “join by code” operations.
+• Generates 6-char join codes.
+• Tracks max-player limit and idle expiry.
+	Room record: {roomId, gameId, visibility, max, joinCode, members[], leaderId}
+	Connection Hub
+	• Maintains long-lived bidirectional channels to every member.
+• Broadcasts each incoming frame unchanged to all others.
+• Validates monotonically increasing sequence numbers and frame size.
+	lastSeq[memberId]
+	Presence & Leader Allocator
+	• Records heartbeats every few seconds.
+• If leader missing twice, promotes the next lowest join-order member and emits roleChange.
+	Sorted member list per room
+	CRDT Store
+	• Last-write-wins key/value map shared by all members.
+• Version numbers resolve conflicts; deltas broadcast as opaque crdt frames.
+	{key:{v,value}} per room
+	Mutex Manager
+	• Distributed lock per key with time-to-live.
+• First requester succeeds; lock auto-expires or unlock frame releases it.
+	{key:{owner,expiresAt}}
+	Link Generator
+	• Converts {roomId, joinCode} to universal links.
+• Deep-link path: /join/<game>/<code>.
+	–
+	No module contains game logic, game types, or event semantics.
+________________
+
+
+3 · Beemi SDK surface (used inside every game)
+arduino
+CopyEdit
+const lobby = await beemi.rooms.host(gameId, {max});   // or quickPlay / joinByCode
+
+
+lobby.role                // "leader" | "peer"
+lobby.emit(type, payload) // opaque broadcast
+lobby.on(type, cb)        // receive events
+
+
+lobby.ifLeader(cb)        // run once per leader term
+crdt.get/set/watch(key)   // shared variables
+mutex.exec(key, ttl, fn)  // critical section helper
+lobby.shareLink()         // beemi://join/<game>/<code>
+
+
+* All helpers compile to the three primitive frame types the server understands: event, crdt, and lock/unlock.
+
+* Automatic reconnection resends un-acked frames and re-establishes locks or CRDT watches.
+
+* Sequence numbers are attached transparently.
+
+________________
+
+
+4 · Beemi app responsibilities & UI flows
+Stage
+	Native UI
+	Behind the scenes
+	Storefront
+	Game grid with “Multiplayer” badge.
+	No multiplayer calls yet.
+	Mode chooser (modal)
+	Buttons: Host, Quick-Play, Join Code.
+	Calls Room Registry accordingly:
+• Host → create private room.
+• Quick-Play → “join next” or spin new public room.
+• Join Code → verify code then join.
+	In-game overlay
+	• Shows join-code or “Public”.
+• Slot counter “3 / 6”.
+• Invite button opens share sheet.
+	Overlay subscribes to room meta frames; hides when game sets overlay:false in manifest.
+	Deep-link handler
+	Opens beemi://join/<game>/<code> from chat, QR, etc.
+	Decodes URL, launches chooser if game not installed yet, then joins room.
+	Web-view bootstrap
+	Injects stub window.beemi before content.
+Loads bundle, then swaps in real SDK.
+	Passes roomToken and connection URL to SDK init.
+	________________
+
+
+5 · Beemi game pattern (example)
+js
+CopyEdit
+import {rooms, crdt, mutex} from 'beemi-sdk';
+
+
+const room = await rooms.quickPlay('wolf', {max:8});
+
+
+// one-off logic
+room.ifLeader(async () => {
+  const players = await room.players();
+  const wolf = randomInt(players.length);
+  crdt.set('roles', players.reduce((o,p,i)=>({...o,[p]:i===wolf?'wolf':'villager'}),{}));
+});
+
+
+// shared state
+crdt.watch('roles', drawRoleBadge);
+
+
+// action
+function vote(id){ room.emit('vote',{id}); }
+
+
+// race-safe night kill (any wolf may attempt)
+async function nightPhase(){
+  await mutex.exec('night',5000, async ()=>{
+    const victim = pickVictim();
+    room.emit('kill',{victim});
+  });
+}
+
+
+The same code runs on every client; leader-gated blocks and locks ensure single execution where required.
+________________
+
+
+6 · Data-flow sequences (textual)
+   1. Hosting a room
+ • App → Server: “create room for gameX”.
+• Server returns {roomId, joinCode, leader:true, token}.
+• App launches Web-view, passes token.
+• First SDK frame: join → Connection Hub → broadcast accept.
+
+   2. Joining via link
+ • Link opens app → UI validates code → Server verifies capacity → returns token.
+• SDK connects; Hub broadcasts event announcing new member; slot counter updates.
+
+   3. CRDT update
+ • Leader sets roles v2.
+• Server stores and fans out {op:"crdt", key:"roles", v:2, value:…}.
+• Every SDK updates local cache and fires watchers.
+
+   4. Leader drop
+ • Hub misses two heartbeats from leader.
+• Presence module selects next join-order member, updates leaderId.
+• Hub broadcasts {op:"roleChange", newLeader:…}.
+• Each SDK reruns queued ifLeader sections in the new leader.
+
+________________
+
+
+7 · Developer checklist (for each layer)
+Beemi server
+      * Implement endpoints for create/join/next.
+
+      * Maintain in-memory room map with expiry.
+
+      * Enforce sequence monotonicity and frame size.
+
+      * Broadcast frames untouched.
+
+      * Provide CRDT, lock and heartbeat subsystems.
+
+      * Deliver role-change on leader loss.
+
+Beemi SDK
+         * Handshake, reconnect, resend.
+
+         * rooms helpers + share link generator.
+
+         * ifLeader, crdt, mutex utilities.
+
+         * Overlay opt-out via manifest flag.
+
+Beemi app
+            * Storefront categorisation.
+
+            * Mode chooser modal.
+
+            * Overlay with share, slots, code.
+
+            * Deep-link interceptor.
+
+            * Web-view bootstrap script.
+
+Beemi games
+               * Use rooms.* to enter a lobby.
+
+               * Gate single-run code with ifLeader.
+
+               * Sync shared state through CRDT.
+
+               * Use locks for critical races.
+
+               * Optionally display room.code or rely on overlay.
+
+This design keeps every concern cleanly separated: the Beemi server is a neutral real-time relay, the SDK is a convenience wrapper, the app offers polished UX, and games remain pure front-end creativity.
+
+
+
+
+1 · Principle — SDK is the only surface a game touches
+From a Beemi-game author’s point of view:
+js
+CopyEdit
+import {room} from 'beemi-sdk';
+room.emit('shoot', {x,y});
+room.on('hit', h => { hp -= h; });
+
+
+No URLs, tokens, or sockets are exposed.
+Everything below the SDK is Beemi’s internal plumbing.
+________________
+
+
+2 · Message path chosen for the mobile app
+pgsql
+CopyEdit
+┌─────────── Beemi game (Web View) ───────────┐
+ │ JS bundle calls beemi-sdk.emit()            │
+ │                                             │
+ │ ① postMessage("beemi:{roomId}:{json}")      │
+ ▼                                             │
+ ┌─────────── Beemi app (native layer) ────────┐
+ │ ConnectionManager holds one WS per room     │
+ │ ② sends frame to Beemi server               │
+ │ ③ receives frame from server                │
+ │ ④ routes to matching Web View(s)            │
+ └─────────────────────────────────────────────┘
+
+
+Rationale
+                  * Single ownership of networking – native layer can keep the socket alive while the Web View is backgrounded, handle retries, and apply bandwidth or battery policies.
+
+                  * Security & simplicity – JWTs, rate-limits, and sequence checks live in one place; the game never holds credentials.
+
+                  * De-duplication – only one connection per room even if you later embed spectator or admin views in parallel WebViews.
+
+________________
+
+
+3 · Component contracts (no tech names)
+Component
+	Receives
+	Sends
+	Behaviour
+	SDK shim in game
+	API calls from game code
+	window.ReactNativeWebView.postMessage()
+	• Serialises {op,event}.
+• Queues if bridge not ready.
+• Delivers inbound events to game listeners.
+	Bridge in Beemi app
+	Web View postMessages
+	Internal event bus
+	• Parses channel id, forwards to ConnectionManager.
+• Forwards inbound server frames back into Web View via injectJavaScript or postMessage.
+	ConnectionManager
+	Bridge messages
+	Server frames
+	• Maintains one persistent channel per room.
+• Appends sequence numbers, verifies ACKs.
+• Emits roleChange, crdt, event to bridge(s).
+	Beemi server
+	Frames with roomId
+	Broadcast frames
+	• Validates size, monotonic seq.
+• Leader election, CRDT, mutex, presence.
+• Never inspects event bodies.
+	________________
+
+
+4 · Inbound flow
+                     1. Server pushes {roomId, frame} to ConnectionManager.
+
+                     2. Manager looks up subscribed Web Views, pushes via bridge.
+
+                     3. SDK dispatches to room.on() callbacks.
+
+                     4. Game updates its canvas.
+
+Latency ≈ WebSocket RTT + one intra-process hop (native→JS).
+________________
+
+
+5 · Fallback for pure-web launches
+If you ever run Beemi games in a desktop browser where no native host exists, the same SDK transparently opens a direct WebSocket.
+Selection rule:
+txt
+CopyEdit
+if (window.ReactNativeWebView) useBridge();
+else                          useDirectSocket();
+
+
+Game authors still write identical code.
+________________
+
+
+6 · Developer guidance
+                        * Emit anywhere: room.emit(type,payload) always works; SDK decides route.
+
+                        * Leader-only blocks: wrap with room.ifLeader(cb); the SDK guarantees single execution.
+
+                        * Do not open fetch/WebSocket to Beemi manually – unsupported and may break on mobile.
+
+This arrangement hides every transport detail from game creators while letting the Beemi team optimise, secure, and monitor a single networking layer.
+End-to-end implementation & smoke-test checklist
+________________
+
+
+1 Beemi server (build once, reusable for all games)
+Step
+	Goal
+	What to implement
+	Minimal self-test
+	1.1
+	Room lifecycle
+	• “Create”, “join-next”, “join-code” commands.
+• Store {roomId, gameId, visibility, max, members[], leaderId, joinCode}.
+• Destroy when members[] empty for 15 min.
+	Curl “create”, then “join-code”; verify JSON reflects membership.
+	1.2
+	Real-time hub
+	• Single bidirectional channel per room.
+• Accept join, event, crdt, lock, unlock frames from ConnectionManager.
+• Broadcast unchanged to all members.
+• Drop frames >4 KB or with non-monotonic seq.
+	Write two command-line clients; send event; both receive same payload.
+	1.3
+	Presence & leader election
+	• Heartbeat timestamp per member.
+• Promote next joinSeq after two missed beats; broadcast roleChange.
+	Kill first client; second receives roleChange.
+	1.4
+	Generic state helpers
+	• Last-write-wins key-value map (CRDT).
+• Distributed lock table (key, owner, ttl).
+	Use a script to set a key from one client and read from another.
+	1.5
+	Share-link service
+	• Map <game>/<code> ⇄ roomId.
+• Return universal link string.
+	Request link; open it in a browser → JSON with room meta.
+	Everything above is game-agnostic and never parses game events.
+________________
+
+
+2 Beemi SDK (embedded in every Web-view)
+Step
+	Goal
+	What to implement
+	Minimal self-test in a browser
+	2.1
+	Transport abstraction
+	• Detect native bridge or open direct socket.
+• Queue until connection ready.
+• Auto-reconnect, resubmit unsent frames.
+	Call emit() before join(); message eventually delivered.
+	2.2
+	Rooms API
+	host(), quickPlay(), joinByCode() ➜ promise resolving to room object containing id, code, role, players().
+	Host then join from second tab; both resolve with same roomId.
+	2.3
+	Event bus
+	room.emit(type,payload) / room.on(type,cb) with implicit seq.
+	Second tab receives first tab’s custom event.
+	2.4
+	Leader helper
+	room.ifLeader(cb) runs once per leader term.
+	Close leader tab; peer reruns callback.
+	2.5
+	Shared state
+	crdt.get/set/watch plus mutex.exec.
+	Watcher fires when key set from peer.
+	2.6
+	Share-link helper
+	room.shareLink() returns deep-link string.
+	Manually open link; SDK joins the same room.
+	________________
+
+
+3 Beemi app (native host)
+Step
+	Goal
+	What to implement
+	Device-level test
+	3.1
+	Storefront
+	Grid of games; tap opens “Multiplayer mode” modal.
+	Tap Host → proceeds to step 3.2.
+	3.2
+	Connection manager
+	Create/join room, maintain one channel per room, map frames to Web-view(s).
+	Two phones host/join same code, indicator shows “2 / 6”.
+	3.3
+	Overlay
+	Code, slot counter, Invite button (opens share sheet).
+	Tap Invite → link copied; open on second phone → auto-joins.
+	3.4
+	Deep-link handler
+	Intercept beemi://join/<game>/<code> and route to 3.2.
+	Scan QR, app launches straight into room.
+	3.5
+	Web-view bootstrap
+	Inject stub window.beemi, load bundle, hand off bridge.
+	Game logs “SDK ready” in Web-view console.
+	________________
+
+
+4 Sample Beemi game (“Ping” demo)
+Files inside ping-game/ bundle.
+js
+CopyEdit
+/* game.js */
+import {rooms, crdt, mutex} from 'beemi-sdk';
+
+
+const room = await rooms.quickPlay('ping', {max:2});
+document.body.innerHTML = `<h1 id=txt>Waiting…</h1>`;
+
+
+let count = 0;
+room.on('ping', n => { count = n; redraw(); });
+
+
+room.ifLeader(() => {
+  setInterval(async () => {
+    await mutex.exec('ball', 1000, () => {
+      room.emit('ping', ++count);
+    });
+  }, 2000);
+});
+
+
+function redraw(){ document.getElementById('txt').textContent = `Ping #${count}`; }
+
+
+Leader increments the count every 2 s; peers just render.
+________________
+
+
+5 End-to-end smoke test (local)
+                           1. Start Beemi server on localhost; console prints “Hub ready”.
+
+                           2. Run Beemi app in two simulators/emulators pointing to localhost.
+
+                           3. On Device A: Home → “Ping” → Host. Overlay shows code ABC123.
+
+                           4. On Device B: Home → “Ping” → Join Code → enter ABC123.
+
+                           5. Both Web-views display “Ping #1, 2, 3…”. Close Device A: after ~6 s Device B becomes leader and counting continues.
+
+                           6. Confirm server logs show heartbeats, role change, CRDT untouched.
+
+If every step passes, the core multiplayer rails are in place; any developer can now drop a bundle, call the SDK, and gain instant, room-based multiplayer without touching backend code.

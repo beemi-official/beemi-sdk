@@ -1,17 +1,643 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Beemi SDK Browser Test</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Beemi SDK Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        
+        h1, h2 {
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+            font-size: 14px;
+        }
+        
+        button:hover {
+            background: #45a049;
+        }
+        
+        button:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 5px;
+        }
+        
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .status.info {
+            background: #cce7ff;
+            color: #004085;
+            border: 1px solid #99d6ff;
+        }
+        
+        .logs {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        
+        .room-info {
+            background: #e3f2fd;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+
+        .test-section {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+    </style>
 </head>
 <body>
-    <h1>Beemi SDK Browser Test</h1>
-    <p>Open DevTools and run: <code>beemi.emit('chat', {text:'spider man'})</code></p>
-    <div id="output"></div>
+    <div class="container">
+        <h1>🎮 Beemi SDK Test Suite</h1>
+        <p>This page demonstrates all the features of the Beemi SDK for multiplayer games.</p>
+        
+        <div id="status" class="status info">
+            Ready to test SDK features...
+        </div>
+    </div>
 
-    <script type="module" src="../beemi-sdk-0.1.js"></script>
+    <!-- Room Management Tests -->
+    <div class="container">
+        <h2>🏠 Room Management</h2>
+        <div class="test-section">
+            <h3>Create/Join Rooms</h3>
+            <button onclick="testHostRoom()">Host New Room</button>
+            <button onclick="testQuickPlay()">Quick Play</button>
+            <div style="margin-top: 10px;">
+                <input type="text" id="joinCode" placeholder="Enter join code (e.g., ABC123)" />
+                <button onclick="testJoinByCode()">Join by Code</button>
+            </div>
+            
+            <div id="roomInfo" class="room-info" style="display: none;">
+                <strong>Room Info:</strong>
+                <div id="roomDetails"></div>
+                <button onclick="shareRoom()">Share Room Link</button>
+                <button onclick="getPlayers()">Get Players</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Event Bus Tests -->
+    <div class="container">
+        <h2>📡 Event Bus</h2>
+        <div class="test-section">
+            <h3>Send/Receive Events</h3>
+            <input type="text" id="eventType" placeholder="Event type (e.g., 'chat')" value="chat" />
+            <input type="text" id="eventData" placeholder="Event data (e.g., 'Hello world')" value="Hello world" />
+            <button onclick="sendEvent()">Send Event</button>
+            <button onclick="testEventBus()">Test Auto Event</button>
+            
+            <div class="logs" id="eventLogs">
+                <div>Event logs will appear here...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Leader Helper Tests -->
+    <div class="container">
+        <h2>👑 Leader Helper</h2>
+        <div class="test-section">
+            <h3>Leader-only Actions</h3>
+            <button onclick="testLeaderHelper()">Test Leader Callback</button>
+            <button onclick="simulateLeaderChange()">Simulate Leader Change</button>
+            
+            <div id="leaderStatus" class="status info">
+                Leader status will appear here...
+            </div>
+        </div>
+    </div>
+
+    <!-- CRDT Tests -->
+    <div class="container">
+        <h2>🔄 Shared State (CRDT)</h2>
+        <div class="test-section">
+            <h3>Synchronized Data</h3>
+            <input type="text" id="crdtKey" placeholder="Key (e.g., 'score')" value="score" />
+            <input type="text" id="crdtValue" placeholder="Value (e.g., '100')" value="100" />
+            <button onclick="setCRDTValue()">Set Value</button>
+            <button onclick="getCRDTValue()">Get Value</button>
+            <button onclick="testCRDTWatch()">Test Watcher</button>
+            
+            <div class="logs" id="crdtLogs">
+                <div>CRDT logs will appear here...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mutex Tests -->
+    <div class="container">
+        <h2>🔒 Mutex Manager</h2>
+        <div class="test-section">
+            <h3>Distributed Locks</h3>
+            <button onclick="testMutex()">Test Mutex Lock</button>
+            <button onclick="testConcurrentMutex()">Test Concurrent Access</button>
+            
+            <div class="logs" id="mutexLogs">
+                <div>Mutex logs will appear here...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Test Logs -->
+    <div class="container">
+        <h2>📋 Test Logs</h2>
+        <div class="logs" id="mainLogs">
+            <div>Main test logs will appear here...</div>
+        </div>
+        <button onclick="clearLogs()">Clear All Logs</button>
+    </div>
+
     <script type="module">
-      import { on } from '../beemi-sdk-0.1.js';
-      on('chat', m => document.body.innerText += '\n' + m.text);
+        // Import the SDK
+        import { host, quickPlay, joinByCode, crdt, mutex } from '../beemi-sdk-0.1.js';
+
+        // Global variables
+        let currentRoom = null;
+        let eventListeners = [];
+
+        // Mock WebSocket for testing (since we don't have a real server)
+        class MockWebSocket {
+            constructor(url) {
+                this.url = url;
+                this.readyState = 1; // OPEN
+                setTimeout(() => {
+                    this.onopen && this.onopen();
+                    log('🔗 Connected to mock server');
+                }, 100);
+            }
+
+            send(data) {
+                const message = JSON.parse(data);
+                log(`📤 Sent: ${message.type}`, 'info');
+                
+                // Simulate server responses
+                setTimeout(() => {
+                    this.simulateServerResponse(message);
+                }, 200);
+            }
+
+            simulateServerResponse(message) {
+                let response;
+                
+                switch (message.type) {
+                    case 'createRoom':
+                        response = {
+                            type: 'roomCreated',
+                            roomId: 'room_' + Math.random().toString(36).substr(2, 9),
+                            joinCode: Math.random().toString(36).substr(2, 6).toUpperCase(),
+                            gameId: message.gameId,
+                            maxPlayers: message.maxPlayers,
+                            members: [{ id: 'player1' }],
+                            leaderId: 'player1'
+                        };
+                        break;
+                    case 'quickPlay':
+                        response = {
+                            type: 'roomJoined',
+                            roomId: 'room_' + Math.random().toString(36).substr(2, 9),
+                            joinCode: Math.random().toString(36).substr(2, 6).toUpperCase(),
+                            gameId: message.gameId,
+                            role: Math.random() > 0.5 ? 'leader' : 'peer',
+                            members: [{ id: 'player1' }, { id: 'player2' }],
+                            leaderId: 'player1'
+                        };
+                        break;
+                    case 'joinByCode':
+                        response = {
+                            type: 'roomJoined',
+                            roomId: 'room_' + Math.random().toString(36).substr(2, 9),
+                            joinCode: message.joinCode,
+                            gameId: message.gameId,
+                            role: 'peer',
+                            members: [{ id: 'player1' }, { id: 'player2' }],
+                            leaderId: 'player1'
+                        };
+                        break;
+                    case 'event':
+                        // Echo event back to simulate multiplayer
+                        response = message;
+                        break;
+                    case 'lock':
+                        response = {
+                            type: 'lockAcquired',
+                            roomId: message.roomId,
+                            key: message.key
+                        };
+                        break;
+                }
+
+                if (response) {
+                    log(`📥 Received: ${response.type}`, 'success');
+                    this.onmessage && this.onmessage({ data: JSON.stringify(response) });
+                }
+            }
+
+            close() {
+                this.onclose && this.onclose();
+            }
+        }
+
+        // Replace WebSocket globally
+        window.WebSocket = MockWebSocket;
+
+        // Utility functions
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logElement = document.getElementById('mainLogs');
+            const statusElement = document.getElementById('status');
+            
+            const logEntry = document.createElement('div');
+            logEntry.innerHTML = `[${timestamp}] ${message}`;
+            logElement.appendChild(logEntry);
+            logElement.scrollTop = logElement.scrollHeight;
+
+            // Update status
+            statusElement.textContent = message;
+            statusElement.className = `status ${type}`;
+        }
+
+        function logToSection(sectionId, message) {
+            const logElement = document.getElementById(sectionId);
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.innerHTML = `[${timestamp}] ${message}`;
+            logElement.appendChild(logEntry);
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+
+        function updateRoomInfo(room) {
+            const roomInfo = document.getElementById('roomInfo');
+            const roomDetails = document.getElementById('roomDetails');
+            
+            if (room) {
+                roomDetails.innerHTML = `
+                    <div><strong>Room ID:</strong> ${room.id}</div>
+                    <div><strong>Join Code:</strong> ${room.code}</div>
+                    <div><strong>Role:</strong> ${room.role}</div>
+                    <div><strong>Game:</strong> ${room.gameId}</div>
+                    <div><strong>Share Link:</strong> ${room.shareLink()}</div>
+                `;
+                roomInfo.style.display = 'block';
+            } else {
+                roomInfo.style.display = 'none';
+            }
+        }
+
+        // Room Management Functions
+        window.testHostRoom = async function() {
+            try {
+                log('🏠 Creating new room...', 'info');
+                currentRoom = await host('test-game', { max: 4 });
+                log(`✅ Room created successfully! Code: ${currentRoom.code}`, 'success');
+                updateRoomInfo(currentRoom);
+                setupEventListeners(currentRoom);
+            } catch (error) {
+                log(`❌ Failed to create room: ${error.message}`, 'error');
+            }
+        };
+
+        window.testQuickPlay = async function() {
+            try {
+                log('🎲 Joining quick play...', 'info');
+                currentRoom = await quickPlay('test-game', { max: 4 });
+                log(`✅ Joined room! Code: ${currentRoom.code} Role: ${currentRoom.role}`, 'success');
+                updateRoomInfo(currentRoom);
+                setupEventListeners(currentRoom);
+            } catch (error) {
+                log(`❌ Failed to join quick play: ${error.message}`, 'error');
+            }
+        };
+
+        window.testJoinByCode = async function() {
+            const code = document.getElementById('joinCode').value;
+            if (!code) {
+                log('❌ Please enter a join code', 'error');
+                return;
+            }
+
+            try {
+                log(`🔑 Joining room with code: ${code}`, 'info');
+                currentRoom = await joinByCode('test-game', code);
+                log(`✅ Joined room successfully!`, 'success');
+                updateRoomInfo(currentRoom);
+                setupEventListeners(currentRoom);
+            } catch (error) {
+                log(`❌ Failed to join room: ${error.message}`, 'error');
+            }
+        };
+
+        window.shareRoom = function() {
+            if (!currentRoom) {
+                log('❌ No active room to share', 'error');
+                return;
+            }
+
+            const shareLink = currentRoom.shareLink();
+            navigator.clipboard.writeText(shareLink).then(() => {
+                log(`📋 Share link copied: ${shareLink}`, 'success');
+            }).catch(() => {
+                log(`🔗 Share link: ${shareLink}`, 'info');
+            });
+        };
+
+        window.getPlayers = async function() {
+            if (!currentRoom) {
+                log('❌ No active room', 'error');
+                return;
+            }
+
+            try {
+                const players = await currentRoom.players();
+                log(`👥 Players: ${players.join(', ')}`, 'info');
+            } catch (error) {
+                log(`❌ Failed to get players: ${error.message}`, 'error');
+            }
+        };
+
+        // Event Bus Functions
+        function setupEventListeners(room) {
+            // Clear existing listeners
+            eventListeners.forEach(({ type, callback }) => {
+                room.off(type, callback);
+            });
+            eventListeners = [];
+
+            // Set up new listeners
+            const chatListener = (data) => {
+                logToSection('eventLogs', `💬 Chat: ${JSON.stringify(data)}`);
+            };
+            
+            const gameListener = (data) => {
+                logToSection('eventLogs', `🎮 Game event: ${JSON.stringify(data)}`);
+            };
+
+            room.on('chat', chatListener);
+            room.on('game', gameListener);
+            
+            eventListeners.push(
+                { type: 'chat', callback: chatListener },
+                { type: 'game', callback: gameListener }
+            );
+        }
+
+        window.sendEvent = function() {
+            if (!currentRoom) {
+                log('❌ No active room', 'error');
+                return;
+            }
+
+            const eventType = document.getElementById('eventType').value;
+            const eventData = document.getElementById('eventData').value;
+
+            if (!eventType) {
+                log('❌ Please enter event type', 'error');
+                return;
+            }
+
+            try {
+                currentRoom.emit(eventType, { message: eventData, timestamp: Date.now() });
+                logToSection('eventLogs', `📤 Sent ${eventType}: ${eventData}`);
+                log(`📤 Event sent: ${eventType}`, 'success');
+            } catch (error) {
+                log(`❌ Failed to send event: ${error.message}`, 'error');
+            }
+        };
+
+        window.testEventBus = function() {
+            if (!currentRoom) {
+                log('❌ No active room', 'error');
+                return;
+            }
+
+            // Simulate receiving an event
+            setTimeout(() => {
+                currentRoom.handleMessage({
+                    type: 'event',
+                    roomId: currentRoom.id,
+                    eventType: 'chat',
+                    payload: { message: 'Auto test message', sender: 'system' }
+                });
+            }, 500);
+
+            log('🔄 Auto event test triggered', 'info');
+        };
+
+        // Leader Helper Functions
+        window.testLeaderHelper = function() {
+            if (!currentRoom) {
+                log('❌ No active room', 'error');
+                return;
+            }
+
+            let callbackExecuted = false;
+            currentRoom.ifLeader(() => {
+                callbackExecuted = true;
+                document.getElementById('leaderStatus').innerHTML = 
+                    `✅ Leader callback executed! You are the leader.`;
+                document.getElementById('leaderStatus').className = 'status success';
+                log('👑 Leader callback executed', 'success');
+            });
+
+            setTimeout(() => {
+                if (!callbackExecuted) {
+                    document.getElementById('leaderStatus').innerHTML = 
+                        `ℹ️ Leader callback not executed. You are a peer.`;
+                    document.getElementById('leaderStatus').className = 'status info';
+                    log('👤 You are not the leader', 'info');
+                }
+            }, 100);
+        };
+
+        window.simulateLeaderChange = function() {
+            if (!currentRoom) {
+                log('❌ No active room', 'error');
+                return;
+            }
+
+            // Simulate becoming leader
+            currentRoom.handleMessage({
+                type: 'roleChange',
+                roomId: currentRoom.id,
+                newLeader: 'player2',
+                memberId: 'player2'
+            });
+
+            log('🔄 Simulated leader change', 'info');
+            updateRoomInfo(currentRoom);
+        };
+
+        // CRDT Functions
+        window.setCRDTValue = function() {
+            const key = document.getElementById('crdtKey').value;
+            const value = document.getElementById('crdtValue').value;
+
+            if (!key) {
+                log('❌ Please enter CRDT key', 'error');
+                return;
+            }
+
+            try {
+                crdt.set(key, value);
+                logToSection('crdtLogs', `📝 Set ${key} = ${value}`);
+                log(`✅ CRDT value set: ${key}`, 'success');
+            } catch (error) {
+                log(`❌ Failed to set CRDT value: ${error.message}`, 'error');
+            }
+        };
+
+        window.getCRDTValue = function() {
+            const key = document.getElementById('crdtKey').value;
+
+            if (!key) {
+                log('❌ Please enter CRDT key', 'error');
+                return;
+            }
+
+            try {
+                const value = crdt.get(key);
+                logToSection('crdtLogs', `📖 Get ${key} = ${value || 'undefined'}`);
+                log(`✅ CRDT value retrieved: ${key} = ${value}`, 'success');
+            } catch (error) {
+                log(`❌ Failed to get CRDT value: ${error.message}`, 'error');
+            }
+        };
+
+        window.testCRDTWatch = function() {
+            const key = document.getElementById('crdtKey').value || 'test-key';
+
+            try {
+                crdt.watch(key, (value, watchedKey) => {
+                    logToSection('crdtLogs', `👀 Watched ${watchedKey} changed to: ${value}`);
+                    log(`🔄 CRDT watcher triggered for: ${watchedKey}`, 'info');
+                });
+
+                // Simulate a change
+                setTimeout(() => {
+                    crdt.set(key, `test-value-${Date.now()}`);
+                }, 500);
+
+                log(`👀 Watcher set for key: ${key}`, 'success');
+            } catch (error) {
+                log(`❌ Failed to set CRDT watcher: ${error.message}`, 'error');
+            }
+        };
+
+        // Mutex Functions
+        window.testMutex = async function() {
+            try {
+                logToSection('mutexLogs', '🔒 Attempting to acquire lock...');
+                
+                const result = await mutex.exec('test-lock', 2000, () => {
+                    logToSection('mutexLogs', '✅ Lock acquired! Executing critical section...');
+                    return 'critical-section-result';
+                });
+
+                logToSection('mutexLogs', `🔓 Lock released. Result: ${result}`);
+                log('✅ Mutex test completed', 'success');
+            } catch (error) {
+                logToSection('mutexLogs', `❌ Mutex error: ${error.message}`);
+                log(`❌ Mutex test failed: ${error.message}`, 'error');
+            }
+        };
+
+        window.testConcurrentMutex = async function() {
+            const promises = [];
+            
+            for (let i = 1; i <= 3; i++) {
+                promises.push(
+                    mutex.exec('concurrent-lock', 1000, () => {
+                        logToSection('mutexLogs', `🔒 Process ${i} executing...`);
+                        return `result-${i}`;
+                    }).then(result => {
+                        logToSection('mutexLogs', `✅ Process ${i} completed: ${result}`);
+                        return result;
+                    }).catch(error => {
+                        logToSection('mutexLogs', `❌ Process ${i} failed: ${error.message}`);
+                        throw error;
+                    })
+                );
+            }
+
+            try {
+                const results = await Promise.allSettled(promises);
+                log('✅ Concurrent mutex test completed', 'success');
+                logToSection('mutexLogs', `📊 Results: ${JSON.stringify(results.map(r => r.status))}`);
+            } catch (error) {
+                log(`❌ Concurrent mutex test failed: ${error.message}`, 'error');
+            }
+        };
+
+        // Utility Functions
+        window.clearLogs = function() {
+            document.getElementById('mainLogs').innerHTML = '<div>Main test logs will appear here...</div>';
+            document.getElementById('eventLogs').innerHTML = '<div>Event logs will appear here...</div>';
+            document.getElementById('crdtLogs').innerHTML = '<div>CRDT logs will appear here...</div>';
+            document.getElementById('mutexLogs').innerHTML = '<div>Mutex logs will appear here...</div>';
+            log('🧹 All logs cleared', 'info');
+        };
+
+        // Initialize
+        log('🚀 Beemi SDK Test Suite initialized', 'success');
+        log('💡 Start by creating or joining a room', 'info');
     </script>
 </body>
 </html> 
