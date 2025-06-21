@@ -150,76 +150,8 @@
     <script type="module">
         import { host, quickPlay, crdt, mutex } from './beemi-sdk-0.1.js';
 
-        // Mock WebSocket for demo (replace with real server in production)
-        class MockWebSocket {
-            constructor(url) {
-                this.url = url;
-                this.readyState = 1;
-                setTimeout(() => {
-                    this.onopen && this.onopen();
-                    log('🔗 Connected to Beemi server');
-                }, 100);
-            }
-
-            send(data) {
-                const message = JSON.parse(data);
-                log(`📤 ${message.type}: ${JSON.stringify(message).substring(0, 50)}...`);
-                
-                setTimeout(() => {
-                    this.simulateServerResponse(message);
-                }, 200);
-            }
-
-            simulateServerResponse(message) {
-                let response;
-                
-                switch (message.type) {
-                    case 'createRoom':
-                        response = {
-                            type: 'roomCreated',
-                            roomId: 'ping_' + Math.random().toString(36).substr(2, 9),
-                            joinCode: Math.random().toString(36).substr(2, 6).toUpperCase(),
-                            gameId: 'ping',
-                            maxPlayers: 4,
-                            members: [{ id: 'player1', name: 'You' }],
-                            leaderId: 'player1'
-                        };
-                        break;
-                    case 'quickPlay':
-                        response = {
-                            type: 'roomJoined',
-                            roomId: 'ping_' + Math.random().toString(36).substr(2, 9),
-                            joinCode: Math.random().toString(36).substr(2, 6).toUpperCase(),
-                            gameId: 'ping',
-                            role: Math.random() > 0.7 ? 'leader' : 'peer',
-                            members: [
-                                { id: 'player1', name: 'Host' },
-                                { id: 'player2', name: 'You' }
-                            ],
-                            leaderId: 'player1'
-                        };
-                        break;
-                    case 'lock':
-                        response = {
-                            type: 'lockAcquired',
-                            roomId: message.roomId,
-                            key: message.key
-                        };
-                        break;
-                }
-
-                if (response) {
-                    this.onmessage && this.onmessage({ data: JSON.stringify(response) });
-                }
-            }
-
-            close() {
-                this.onclose && this.onclose();
-            }
-        }
-
-        // Replace WebSocket globally
-        window.WebSocket = MockWebSocket;
+        // The Beemi SDK now handles React Native bridge communication automatically
+        // No need for WebSocket mocking - the SDK will receive real room state from the Beemi React Native app
 
         // Game state
         let currentRoom = null;
@@ -256,16 +188,19 @@
             const roomInfoEl = document.getElementById('roomInfo');
             roomInfoEl.innerHTML = `
                 <div><strong>Room:</strong> ${room.code}</div>
-                <div><strong>Role:</strong> ${room.role === 'leader' ? '👑 Leader' : '👤 Player'}</div>
-                <div><strong>Players:</strong> ${room.members.length}/${room.maxPlayers}</div>
+                <div><strong>Player ID:</strong> ${room.playerId}</div>
+                <div><strong>Role:</strong> ${room.isLeader ? '👑 Leader' : '👤 Peer'}</div>
+                <div><strong>Leader ID:</strong> ${room.leaderId}</div>
+                <div><strong>Players:</strong> ${room.playerCount}/${room.maxPlayers}</div>
             `;
         }
 
-        function updatePlayers(members, leaderId) {
+        function updatePlayers(room) {
             const playersEl = document.getElementById('players');
-            playersEl.innerHTML = members.map(member => `
-                <div class="player ${member.id === leaderId ? 'leader' : ''}">
-                    ${member.id === leaderId ? '👑' : '👤'} ${member.name || member.id}
+            const players = room.players || [];
+            playersEl.innerHTML = players.map(playerId => `
+                <div class="player ${playerId === room.leaderId ? 'leader' : ''}">
+                    ${playerId === room.leaderId ? '👑' : '👤'} ${playerId === room.playerId ? 'You' : playerId}
                 </div>
             `).join('');
         }
@@ -276,8 +211,11 @@
                 updateStatus('Creating room...', 'info');
                 currentRoom = await host('ping', { max: 4 });
                 
-                isLeader = currentRoom.role === 'leader';
+                isLeader = currentRoom.isLeader;
                 log(`🏠 Room created! Code: ${currentRoom.code}`);
+                log(`👤 Player ID: ${currentRoom.playerId}`);
+                log(`👑 Leader: ${currentRoom.isLeader ? 'You are the leader!' : 'You are a peer'}`);
+                log(`📊 Room info from RN app: ${JSON.stringify(currentRoom.getState())}`);
                 
                 setupGame();
             } catch (error) {
@@ -291,8 +229,11 @@
                 updateStatus('Joining game...', 'info');
                 currentRoom = await quickPlay('ping', { max: 4 });
                 
-                isLeader = currentRoom.role === 'leader';
-                log(`🎮 Joined room! Code: ${currentRoom.code} Role: ${currentRoom.role}`);
+                isLeader = currentRoom.isLeader;
+                log(`🎮 Joined room! Code: ${currentRoom.code}`);
+                log(`👤 Player ID: ${currentRoom.playerId}`);
+                log(`👑 Leader: ${currentRoom.isLeader ? 'You are the leader!' : 'You are a peer'}`);
+                log(`📊 Room info from RN app: ${JSON.stringify(currentRoom.getState())}`);
                 
                 setupGame();
             } catch (error) {
@@ -307,14 +248,53 @@
             document.getElementById('gameArea').style.display = 'block';
             
             updateRoomInfo(currentRoom);
-            updatePlayers(currentRoom.members, currentRoom.leaderId);
+            updatePlayers(currentRoom);
             updateStatus('Connected! Game starting...', 'success');
+            
+            // Log detailed room state for debugging
+            log(`🔍 Room state details:`);
+            log(`   • Room ID: ${currentRoom.id}`);
+            log(`   • Join Code: ${currentRoom.code}`);
+            log(`   • My Player ID: ${currentRoom.playerId}`);
+            log(`   • Am I Leader: ${currentRoom.isLeader}`);
+            log(`   • Current Leader: ${currentRoom.leaderId}`);
+            log(`   • Player Count: ${currentRoom.playerCount}/${currentRoom.maxPlayers}`);
 
             // Set up event listeners
             currentRoom.on('ping', (data) => {
                 pingCount = data.count;
                 updatePingDisplay(pingCount);
                 log(`🏓 Ping #${pingCount} from ${data.from}`);
+            });
+            
+            // Listen for room state updates from React Native
+            window.beemi.on('room-state-updated', (state) => {
+                log(`📱 Room state updated from RN app:`, state);
+                updateRoomInfo(currentRoom);
+                updatePlayers(currentRoom);
+            });
+            
+            window.beemi.on('player-joined', (data) => {
+                log(`👋 Player joined: ${JSON.stringify(data)}`);
+                updatePlayers(currentRoom);
+            });
+            
+            window.beemi.on('player-left', (data) => {
+                log(`👋 Player left: ${JSON.stringify(data)}`);
+                updatePlayers(currentRoom);
+            });
+            
+            window.beemi.on('leader-changed', (data) => {
+                log(`👑 Leadership changed: ${JSON.stringify(data)}`);
+                isLeader = data.isLeader;
+                updateRoomInfo(currentRoom);
+                updatePlayers(currentRoom);
+                
+                if (data.isLeader) {
+                    updateStatus('You are now the leader!', 'success');
+                } else {
+                    updateStatus('Leadership changed to another player', 'info');
+                }
             });
 
             // Leader-only game logic
@@ -401,14 +381,23 @@
         };
 
         // Initialize
-        log('🚀 Ping Game initialized');
-        log('💡 This game demonstrates all Beemi SDK features:');
+        log('🚀 Ping Game initialized with React Native bridge support');
+        log('📱 This demo shows how the SDK receives accurate room state from the Beemi React Native app:');
+        log('   • Player ID assignment from RN app');
+        log('   • Accurate leader/peer role determination');
+        log('   • Real-time player count updates');
+        log('   • Leadership change notifications');
+        log('   • Room state synchronization');
+        log('');
+        log('💡 Beemi SDK features demonstrated:');
         log('   • Room management (host/join)');
         log('   • Event bus (ping events)');
         log('   • Leader election (ping coordination)');
         log('   • CRDT (shared game state)');
         log('   • Mutex (exclusive ping generation)');
         log('   • Share links (room sharing)');
+        log('');
+        log('🔍 Watch the logs to see room state updates from the React Native app!');
     </script>
 </body>
 </html> 

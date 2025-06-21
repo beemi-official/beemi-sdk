@@ -1,604 +1,599 @@
-/**
- * Beemi SDK v0.1
- * Multiplayer game SDK that abstracts transport layer and provides
- * room management, event bus, leader election, and shared state primitives.
+/* 
+ * Beemi SDK v0.1 - Multiplayer Game SDK
+ * 
+ * Provides multiplayer functionality through React Native bridge:
+ * - Room management (host, join, quickPlay)
+ * - Real-time event broadcasting
+ * - Leader election and role management
+ * - Shared state (CRDT) management
+ * - Distributed mutex/locking
  */
 
-// =============================================================================
-// 1. TRANSPORT ABSTRACTION
-// =============================================================================
-
-class Transport {
-  constructor() {
-    this.isConnected = false;
-    this.messageQueue = [];
-    this.messageHandlers = [];
-    this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 5;
-    this.reconnectDelay = 1000;
-    this.lastSequence = 0;
-    this.pendingFrames = new Map(); // For resending unacked frames
-  }
-
-  // Detect if we're in React Native WebView or browser
-  detectTransport() {
-    if (typeof window !== 'undefined' && window.ReactNativeWebView) {
-      return 'bridge';
-    } else if (typeof WebSocket !== 'undefined') {
-      return 'websocket';
-    } else {
-      throw new Error('No supported transport available');
-    }
-  }
-
-  async connect(config) {
-    const transportType = this.detectTransport();
-    
-    if (transportType === 'bridge') {
-      await this.connectViaBridge(config);
-    } else {
-      await this.connectViaWebSocket(config);
-    }
-  }
-
-  async connectViaBridge(config) {
-    // Set up bridge communication
-    this.transportType = 'bridge';
-    
-    // Listen for messages from native layer
-    if (typeof window !== 'undefined') {
-      window.addEventListener('message', (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.source === 'beemi') {
-            this.handleIncomingMessage(data);
-          }
-        } catch (e) {
-          console.warn('Failed to parse bridge message:', e);
-        }
-      });
-    }
-
-    this.isConnected = true;
-    this.processQueue();
-  }
-
-  async connectViaWebSocket(config) {
-    return new Promise((resolve, reject) => {
-      const wsUrl = config.serverUrl || 'ws://localhost:8080';
-      this.ws = new WebSocket(wsUrl);
-      this.transportType = 'websocket';
-
-      this.ws.onopen = () => {
-        this.isConnected = true;
-        this.reconnectAttempts = 0;
-        this.processQueue();
-        resolve();
-      };
-
-      this.ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          this.handleIncomingMessage(data);
-        } catch (e) {
-          console.warn('Failed to parse WebSocket message:', e);
-        }
-      };
-
-      this.ws.onclose = () => {
-        this.isConnected = false;
-        this.attemptReconnect(config);
-      };
-
-      this.ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        reject(error);
-      };
-    });
-  }
-
-  send(frame) {
-    frame.seq = ++this.lastSequence;
-    frame.timestamp = Date.now();
-
-    if (frame.type !== 'heartbeat') {
-      this.pendingFrames.set(frame.seq, frame);
-    }
-
-    if (this.isConnected) {
-      this.sendFrame(frame);
-    } else {
-      this.messageQueue.push(frame);
-    }
-  }
-
-  sendFrame(frame) {
-    if (this.transportType === 'bridge') {
-      window.ReactNativeWebView.postMessage(JSON.stringify({
-        source: 'beemi',
-        ...frame
-      }));
-    } else if (this.transportType === 'websocket' && this.ws) {
-      this.ws.send(JSON.stringify(frame));
-    }
-  }
-
-  handleIncomingMessage(data) {
-    // Handle ACKs
-    if (data.type === 'ack' && data.seq) {
-      this.pendingFrames.delete(data.seq);
-    }
-
-    // Forward to registered handlers
-    this.messageHandlers.forEach(handler => handler(data));
-  }
-
-  processQueue() {
-    while (this.messageQueue.length > 0 && this.isConnected) {
-      const frame = this.messageQueue.shift();
-      this.sendFrame(frame);
-    }
-  }
-
-  attemptReconnect(config) {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('Max reconnection attempts reached');
-      return;
-    }
-
-    this.reconnectAttempts++;
-    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-
-    setTimeout(() => {
-      console.log(`Attempting reconnection ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
-      this.connect(config).then(() => {
-        // Resend pending frames
-        this.pendingFrames.forEach(frame => this.sendFrame(frame));
-      }).catch(console.error);
-    }, delay);
-  }
-
-  onMessage(handler) {
-    this.messageHandlers.push(handler);
-  }
-}
-
-// =============================================================================
-// 2. ROOMS API
-// =============================================================================
-
-class Room {
-  constructor(roomData) {
-    this.id = roomData.roomId;
-    this.code = roomData.joinCode;
-    this.role = roomData.role || 'peer';
-    this.gameId = roomData.gameId;
-    this.maxPlayers = roomData.maxPlayers;
-    this.members = roomData.members || [];
-    this.leaderId = roomData.leaderId;
-    
-    this.eventListeners = {};
-    this.leaderCallbacks = [];
-    this.isLeaderCallbacksExecuted = false;
-  }
-
-  // Event bus methods
-  emit(type, payload) {
-    const frame = {
-      type: 'event',
-      roomId: this.id,
-      eventType: type,
-      payload: payload
-    };
-    transport.send(frame);
-  }
-
-  on(type, callback) {
-    if (!this.eventListeners[type]) {
-      this.eventListeners[type] = [];
-    }
-    this.eventListeners[type].push(callback);
-  }
-
-  off(type, callback) {
-    if (this.eventListeners[type]) {
-      this.eventListeners[type] = this.eventListeners[type].filter(cb => cb !== callback);
-    }
-  }
-
-  // Leader helper
-  ifLeader(callback) {
-    this.leaderCallbacks.push(callback);
-    if (this.role === 'leader' && !this.isLeaderCallbacksExecuted) {
-      this.executeLeaderCallbacks();
-    }
-  }
-
-  executeLeaderCallbacks() {
-    this.isLeaderCallbacksExecuted = true;
-    this.leaderCallbacks.forEach(callback => {
-      try {
-        callback();
-      } catch (e) {
-        console.error('Error executing leader callback:', e);
-      }
-    });
-  }
-
-  // Get current players
-  async players() {
-    return this.members.map(m => m.id);
-  }
-
-  // Share link helper
-  shareLink() {
-    return `beemi://join/${this.gameId}/${this.code}`;
-  }
-
-  // Handle incoming messages
-  handleMessage(data) {
-    switch (data.type) {
-      case 'event':
-        if (data.roomId === this.id && this.eventListeners[data.eventType]) {
-          this.eventListeners[data.eventType].forEach(callback => callback(data.payload));
-        }
-        break;
-      case 'roleChange':
-        if (data.roomId === this.id) {
-          const wasLeader = this.role === 'leader';
-          this.role = data.newLeader === data.memberId ? 'leader' : 'peer';
-          this.leaderId = data.newLeader;
-          
-          if (this.role === 'leader' && !wasLeader) {
-            this.isLeaderCallbacksExecuted = false;
-            this.executeLeaderCallbacks();
-          }
-        }
-        break;
-      case 'memberJoined':
-      case 'memberLeft':
-        if (data.roomId === this.id) {
-          this.members = data.members || [];
-        }
-        break;
-    }
-  }
-}
-
-// =============================================================================
-// 3. SHARED STATE (CRDT)
-// =============================================================================
-
-class CRDT {
-  constructor(roomId) {
-    this.roomId = roomId;
-    this.data = {};
-    this.watchers = {};
-  }
-
-  get(key) {
-    return this.data[key]?.value;
-  }
-
-  set(key, value) {
-    const version = (this.data[key]?.version || 0) + 1;
-    this.data[key] = { value, version };
-
-    const frame = {
-      type: 'crdt',
-      roomId: this.roomId,
-      key,
-      value,
-      version
-    };
-    transport.send(frame);
-
-    this.notifyWatchers(key, value);
-  }
-
-  watch(key, callback) {
-    if (!this.watchers[key]) {
-      this.watchers[key] = [];
-    }
-    this.watchers[key].push(callback);
-  }
-
-  unwatch(key, callback) {
-    if (this.watchers[key]) {
-      this.watchers[key] = this.watchers[key].filter(cb => cb !== callback);
-    }
-  }
-
-  handleUpdate(data) {
-    if (data.roomId !== this.roomId) return;
-
-    const currentVersion = this.data[data.key]?.version || 0;
-    if (data.version > currentVersion) {
-      this.data[data.key] = { value: data.value, version: data.version };
-      this.notifyWatchers(data.key, data.value);
-    }
-  }
-
-  notifyWatchers(key, value) {
-    if (this.watchers[key]) {
-      this.watchers[key].forEach(callback => {
-        try {
-          callback(value, key);
-        } catch (e) {
-          console.error('Error in CRDT watcher:', e);
-        }
-      });
-    }
-  }
-}
-
-// =============================================================================
-// 4. MUTEX MANAGER
-// =============================================================================
-
-class Mutex {
-  constructor(roomId) {
-    this.roomId = roomId;
-    this.locks = {};
-  }
-
-  async exec(key, ttl, fn) {
-    const lockFrame = {
-      type: 'lock',
-      roomId: this.roomId,
-      key,
-      ttl
-    };
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error(`Failed to acquire lock for key: ${key}`));
-      }, ttl + 1000);
-
-      const handleLockResponse = (data) => {
-        if (data.type === 'lockAcquired' && data.key === key && data.roomId === this.roomId) {
-          clearTimeout(timeout);
-          transport.messageHandlers = transport.messageHandlers.filter(h => h !== handleLockResponse);
-          
-          try {
-            const result = fn();
-            Promise.resolve(result).then(resolve).catch(reject).finally(() => {
-              this.release(key);
-            });
-          } catch (error) {
-            this.release(key);
-            reject(error);
-          }
-        } else if (data.type === 'lockFailed' && data.key === key && data.roomId === this.roomId) {
-          clearTimeout(timeout);
-          transport.messageHandlers = transport.messageHandlers.filter(h => h !== handleLockResponse);
-          reject(new Error(`Lock acquisition failed for key: ${key}`));
-        }
-      };
-
-      transport.onMessage(handleLockResponse);
-      transport.send(lockFrame);
-    });
-  }
-
-  release(key) {
-    const unlockFrame = {
-      type: 'unlock',
-      roomId: this.roomId,
-      key
-    };
-    transport.send(unlockFrame);
-  }
-}
-
-// =============================================================================
-// 5. MAIN SDK INTERFACE
-// =============================================================================
-
-const transport = new Transport();
-const rooms = {};
-const crdtInstances = {};
-const mutexInstances = {};
-
-// Room management functions
-async function host(gameId, options = {}) {
-  const config = {
-    serverUrl: options.serverUrl,
-    ...options
-  };
-
-  await transport.connect(config);
-
-  return new Promise((resolve, reject) => {
-    const createFrame = {
-      type: 'createRoom',
-      gameId,
-      maxPlayers: options.max || 4,
-      visibility: 'private'
-    };
-
-    const handleResponse = (data) => {
-      if (data.type === 'roomCreated') {
-        transport.messageHandlers = transport.messageHandlers.filter(h => h !== handleResponse);
-        const room = new Room({ ...data, role: 'leader' });
-        rooms[room.id] = room;
-        
-        // Set up message handling for this room
-        transport.onMessage((msg) => room.handleMessage(msg));
-        
-        resolve(room);
-      } else if (data.type === 'error') {
-        transport.messageHandlers = transport.messageHandlers.filter(h => h !== handleResponse);
-        reject(new Error(data.message));
-      }
-    };
-
-    transport.onMessage(handleResponse);
-    transport.send(createFrame);
-  });
-}
-
-async function quickPlay(gameId, options = {}) {
-  const config = {
-    serverUrl: options.serverUrl,
-    ...options
-  };
-
-  await transport.connect(config);
-
-  return new Promise((resolve, reject) => {
-    const joinFrame = {
-      type: 'quickPlay',
-      gameId,
-      maxPlayers: options.max || 4
-    };
-
-    const handleResponse = (data) => {
-      if (data.type === 'roomJoined') {
-        transport.messageHandlers = transport.messageHandlers.filter(h => h !== handleResponse);
-        const room = new Room(data);
-        rooms[room.id] = room;
-        
-        // Set up message handling for this room
-        transport.onMessage((msg) => room.handleMessage(msg));
-        
-        resolve(room);
-      } else if (data.type === 'error') {
-        transport.messageHandlers = transport.messageHandlers.filter(h => h !== handleResponse);
-        reject(new Error(data.message));
-      }
-    };
-
-    transport.onMessage(handleResponse);
-    transport.send(joinFrame);
-  });
-}
-
-async function joinByCode(gameId, code, options = {}) {
-  const config = {
-    serverUrl: options.serverUrl,
-    ...options
-  };
-
-  await transport.connect(config);
-
-  return new Promise((resolve, reject) => {
-    const joinFrame = {
-      type: 'joinByCode',
-      gameId,
-      joinCode: code
-    };
-
-    const handleResponse = (data) => {
-      if (data.type === 'roomJoined') {
-        transport.messageHandlers = transport.messageHandlers.filter(h => h !== handleResponse);
-        const room = new Room(data);
-        rooms[room.id] = room;
-        
-        // Set up message handling for this room
-        transport.onMessage((msg) => room.handleMessage(msg));
-        
-        resolve(room);
-      } else if (data.type === 'error') {
-        transport.messageHandlers = transport.messageHandlers.filter(h => h !== handleResponse);
-        reject(new Error(data.message));
-      }
-    };
-
-    transport.onMessage(handleResponse);
-    transport.send(joinFrame);
-  });
-}
-
-// CRDT helper functions
-function getCRDT(roomId) {
-  if (!crdtInstances[roomId]) {
-    crdtInstances[roomId] = new CRDT(roomId);
-    // Set up CRDT message handling
-    transport.onMessage((data) => {
-      if (data.type === 'crdt') {
-        crdtInstances[roomId].handleUpdate(data);
-      }
-    });
-  }
-  return crdtInstances[roomId];
-}
-
-// Mutex helper functions
-function getMutex(roomId) {
-  if (!mutexInstances[roomId]) {
-    mutexInstances[roomId] = new Mutex(roomId);
-  }
-  return mutexInstances[roomId];
-}
-
-// =============================================================================
-// 6. EXPORTS
-// =============================================================================
-
-// Main SDK interface
-export const sdk = {
-  rooms: {
-    host,
-    quickPlay,
-    joinByCode
-  }
-};
-
-// Convenience exports for games
-export { host, quickPlay, joinByCode };
-
-// Global CRDT and Mutex interfaces
-export const crdt = {
-  get: (key) => {
-    const room = Object.values(rooms)[0]; // Get first room for now
-    if (!room) throw new Error('No active room');
-    return getCRDT(room.id).get(key);
-  },
-  set: (key, value) => {
-    const room = Object.values(rooms)[0];
-    if (!room) throw new Error('No active room');
-    getCRDT(room.id).set(key, value);
-  },
-  watch: (key, callback) => {
-    const room = Object.values(rooms)[0];
-    if (!room) throw new Error('No active room');
-    getCRDT(room.id).watch(key, callback);
-  }
-};
-
-export const mutex = {
-  exec: (key, ttl, fn) => {
-    const room = Object.values(rooms)[0];
-    if (!room) throw new Error('No active room');
-    return getMutex(room.id).exec(key, ttl, fn);
-  }
-};
-
-// Legacy event bus exports (for backward compatibility)
-const legacyListeners = {};
-
+/* Event bus for internal communication */
+const listeners = {};
+let roomState = null;
+let isInitialized = false;
+let currentRoom = null;
+let messageId = 0;
+let pendingCallbacks = new Map();
+
+/* Core event system */
 export function on(type, cb) { 
-  (legacyListeners[type] ||= []).push(cb); 
+  (listeners[type] ||= []).push(cb); 
 }
 
 export function emit(type, data) { 
-  (legacyListeners[type] || []).forEach(f => f(data)); 
+  (listeners[type] || []).forEach(f => f(data)); 
 }
 
+/* React Native Bridge Communication */
+function sendToNative(message) {
+  const msgId = ++messageId;
+  const payload = {
+    type: 'beemi-multiplayer',
+    messageId: msgId,
+    timestamp: Date.now(),
+    ...message
+  };
+  
+  console.log('📤 Sending to RN:', payload);
+  
+  if (window.ReactNativeWebView) {
+    window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+  } else {
+    // Browser fallback - simulate for testing
+    console.log('🔄 Browser fallback - simulating RN response');
+    simulateBrowserResponse(payload);
+  }
+  
+  return msgId;
+}
+
+function handleNativeMessage(message) {
+  console.log('📥 Received from RN:', message);
+  
+  // Handle responses to specific message IDs
+  if (message.messageId && pendingCallbacks.has(message.messageId)) {
+    const callback = pendingCallbacks.get(message.messageId);
+    pendingCallbacks.delete(message.messageId);
+    callback(message);
+    return;
+  }
+  
+  switch (message.type) {
+    case 'room-state':
+      updateRoomState(message.data);
+      break;
+    case 'room-joined':
+    case 'room-created':
+      updateRoomState(message.data);
+      emit('room-ready', message.data);
+      break;
+    case 'player-joined':
+      if (roomState) {
+        roomState.playerCount = message.data.playerCount;
+        roomState.players = message.data.players;
+      }
+      emit('player-joined', message.data);
+      break;
+    case 'player-left':
+      if (roomState) {
+        roomState.playerCount = message.data.playerCount;
+        roomState.players = message.data.players;
+      }
+      emit('player-left', message.data);
+      break;
+    case 'leader-changed':
+      if (roomState) {
+        const wasLeader = roomState.isLeader;
+        roomState.isLeader = message.data.newLeaderId === roomState.playerId;
+        roomState.leaderId = message.data.newLeaderId;
+        
+        console.log(`👑 Leadership change: ${wasLeader} -> ${roomState.isLeader} (my ID: ${roomState.playerId}, new leader: ${message.data.newLeaderId})`);
+        
+        emit('leader-changed', {
+          ...message.data,
+          isLeader: roomState.isLeader,
+          wasLeader
+        });
+        
+        // Trigger leader callbacks if we became leader
+        if (!wasLeader && roomState.isLeader && currentRoom) {
+          currentRoom._triggerLeaderCallbacks();
+        }
+      }
+      break;
+    case 'room-event':
+      emit(message.data.eventType, message.data.payload);
+      break;
+    case 'crdt-update':
+      if (roomState && roomState.sharedState) {
+        roomState.sharedState[message.data.key] = message.data.value;
+      }
+      emit('crdt-update', message.data);
+      break;
+    case 'mutex-acquired':
+      emit('mutex-acquired', message.data);
+      break;
+    case 'mutex-released':
+      emit('mutex-released', message.data);
+      break;
+    case 'players-list':
+      emit('players-list', message.data);
+      break;
+    case 'error':
+      console.error('❌ RN Error:', message.error);
+      emit('error', message);
+      break;
+  }
+}
+
+function updateRoomState(newState) {
+  const oldState = roomState;
+  roomState = { ...newState };
+  
+  console.log('🏠 Room state updated:', {
+    playerId: roomState.playerId,
+    isLeader: roomState.isLeader,
+    playerCount: roomState.playerCount,
+    leaderId: roomState.leaderId
+  });
+  
+  // Notify about state changes
+  if (oldState?.playerId !== newState.playerId) {
+    emit('player-id-changed', { playerId: newState.playerId });
+  }
+  
+  if (oldState?.isLeader !== newState.isLeader) {
+    console.log(`🔄 Role changed: ${oldState?.isLeader} -> ${newState.isLeader}`);
+    emit('role-changed', { 
+      isLeader: newState.isLeader, 
+      role: newState.isLeader ? 'leader' : 'peer',
+      playerId: newState.playerId
+    });
+  }
+  
+  if (oldState?.playerCount !== newState.playerCount) {
+    emit('player-count-changed', { count: newState.playerCount });
+  }
+  
+  emit('room-state-updated', roomState);
+}
+
+/* Room Management API */
+export const rooms = {
+  async quickPlay(gameId, options = {}) {
+    return new Promise((resolve, reject) => {
+      console.log('🎮 QuickPlay request:', gameId, options);
+      
+      const msgId = sendToNative({
+        action: 'quick-play',
+        gameId,
+        options
+      });
+      
+      const timeout = setTimeout(() => {
+        reject(new Error('Room join timeout'));
+      }, 15000);
+      
+      const handleRoomReady = (state) => {
+        clearTimeout(timeout);
+        console.log('✅ QuickPlay successful:', state);
+        const room = createRoomObject(state);
+        currentRoom = room;
+        resolve(room);
+      };
+      
+      // Listen for room ready event
+      const removeListener = () => {
+        // Clean up listener
+      };
+      
+      on('room-ready', handleRoomReady);
+    });
+  },
+  
+  async host(gameId, options = {}) {
+    return new Promise((resolve, reject) => {
+      console.log('🏠 Host request:', gameId, options);
+      
+      const msgId = sendToNative({
+        action: 'host-room',
+        gameId,
+        options
+      });
+      
+      const timeout = setTimeout(() => {
+        reject(new Error('Room creation timeout'));
+      }, 15000);
+      
+      const handleRoomReady = (state) => {
+        clearTimeout(timeout);
+        console.log('✅ Host successful:', state);
+        const room = createRoomObject(state);
+        currentRoom = room;
+        resolve(room);
+      };
+      
+      on('room-ready', handleRoomReady);
+    });
+  },
+  
+  async joinByCode(gameId, code, options = {}) {
+    return new Promise((resolve, reject) => {
+      console.log('🔑 Join by code:', gameId, code);
+      
+      const msgId = sendToNative({
+        action: 'join-by-code',
+        gameId,
+        code,
+        options
+      });
+      
+      const timeout = setTimeout(() => {
+        reject(new Error('Room join timeout'));
+      }, 15000);
+      
+      const handleRoomReady = (state) => {
+        clearTimeout(timeout);
+        console.log('✅ Join successful:', state);
+        const room = createRoomObject(state);
+        currentRoom = room;
+        resolve(room);
+      };
+      
+      on('room-ready', handleRoomReady);
+    });
+  }
+};
+
+/* Room Object Factory */
+function createRoomObject(state) {
+  const leaderCallbacks = [];
+  let leaderCallbacksExecuted = false;
+  
+  const room = {
+    id: state.roomId,
+    code: state.joinCode,
+    gameId: state.gameId,
+    role: state.isLeader ? 'leader' : 'peer',
+    playerId: state.playerId,
+    playerCount: state.playerCount,
+    maxPlayers: state.maxPlayers,
+    isLeader: state.isLeader,
+    leaderId: state.leaderId,
+    players: state.players || [],
+    
+    // Event broadcasting
+    emit(eventType, payload) {
+      console.log(`📡 Broadcasting event: ${eventType}`, payload);
+      sendToNative({
+        action: 'broadcast-event',
+        eventType,
+        payload,
+        roomId: state.roomId
+      });
+    },
+    
+    on(eventType, callback) {
+      on(eventType, callback);
+    },
+    
+    off(eventType, callback) {
+      if (listeners[eventType]) {
+        listeners[eventType] = listeners[eventType].filter(cb => cb !== callback);
+      }
+    },
+    
+    // Leader-only operations
+    ifLeader(callback) {
+      leaderCallbacks.push(callback);
+      
+      // Execute immediately if currently leader
+      if (state.isLeader && !leaderCallbacksExecuted) {
+        console.log('👑 Executing leader callback immediately');
+        try {
+          callback();
+          leaderCallbacksExecuted = true;
+        } catch (error) {
+          console.error('Error in leader callback:', error);
+        }
+      }
+    },
+    
+    // Internal method to trigger leader callbacks
+    _triggerLeaderCallbacks() {
+      if (roomState && roomState.isLeader && !leaderCallbacksExecuted) {
+        console.log('👑 Triggering leader callbacks after leadership change');
+        leaderCallbacks.forEach(callback => {
+          try {
+            callback();
+          } catch (error) {
+            console.error('Error in leader callback:', error);
+          }
+        });
+        leaderCallbacksExecuted = true;
+      }
+    },
+    
+    // Player management
+    async players() {
+      return new Promise((resolve) => {
+        if (roomState && roomState.players) {
+          resolve(roomState.players);
+          return;
+        }
+        
+        sendToNative({
+          action: 'get-players',
+          roomId: state.roomId
+        });
+        
+        const handlePlayersList = (data) => {
+          resolve(data.players);
+        };
+        
+        on('players-list', handlePlayersList);
+      });
+    },
+    
+    // Share link
+    shareLink() {
+      return `beemi://join/${state.gameId}/${state.joinCode}`;
+    },
+    
+    // Get current room state
+    getState() {
+      return {
+        ...roomState,
+        role: roomState?.isLeader ? 'leader' : 'peer'
+      };
+    }
+  };
+  
+  // Listen for leadership changes
+  on('leader-changed', (data) => {
+    if (data.isLeader && !data.wasLeader) {
+      leaderCallbacksExecuted = false;
+      room._triggerLeaderCallbacks();
+    }
+  });
+  
+  return room;
+}
+
+/* CRDT (Shared State) Management */
+export const crdt = {
+  get(key) {
+    const value = roomState?.sharedState?.[key];
+    console.log(`📖 CRDT get: ${key} = ${value}`);
+    return value;
+  },
+  
+  set(key, value) {
+    console.log(`📝 CRDT set: ${key} = ${value}`);
+    
+    // Update local state immediately
+    if (roomState && roomState.sharedState) {
+      roomState.sharedState[key] = value;
+    }
+    
+    sendToNative({
+      action: 'crdt-set',
+      key,
+      value,
+      roomId: roomState?.roomId
+    });
+    
+    // Trigger local watchers
+    emit('crdt-update', { key, value });
+  },
+  
+  watch(key, callback) {
+    console.log(`👀 CRDT watch: ${key}`);
+    on('crdt-update', (data) => {
+      if (data.key === key) {
+        callback(data.value, key);
+      }
+    });
+  }
+};
+
+/* Mutex (Distributed Locking) */
+export const mutex = {
+  async exec(key, ttl, callback) {
+    console.log(`🔒 Mutex acquire: ${key} (ttl: ${ttl}ms)`);
+    
+    return new Promise((resolve, reject) => {
+      const timeoutHandle = setTimeout(() => {
+        reject(new Error(`Mutex timeout: ${key}`));
+      }, ttl + 1000);
+      
+      sendToNative({
+        action: 'mutex-acquire',
+        key,
+        ttl,
+        roomId: roomState?.roomId
+      });
+      
+      const handleAcquired = (data) => {
+        if (data.key === key) {
+          clearTimeout(timeoutHandle);
+          
+          if (data.success) {
+            console.log(`✅ Mutex acquired: ${key}`);
+            try {
+              const result = callback();
+              Promise.resolve(result).then(resolve).catch(reject).finally(() => {
+                console.log(`🔓 Mutex releasing: ${key}`);
+                sendToNative({
+                  action: 'mutex-release',
+                  key,
+                  roomId: roomState?.roomId
+                });
+              });
+            } catch (error) {
+              console.log(`🔓 Mutex releasing (error): ${key}`);
+              sendToNative({
+                action: 'mutex-release',
+                key,
+                roomId: roomState?.roomId
+              });
+              reject(error);
+            }
+          } else {
+            reject(new Error(`Failed to acquire mutex: ${key}`));
+          }
+        }
+      };
+      
+      on('mutex-acquired', handleAcquired);
+    });
+  }
+};
+
+/* Browser fallback simulation for testing */
+function simulateBrowserResponse(payload) {
+  setTimeout(() => {
+    let response;
+    
+    switch (payload.action) {
+      case 'quick-play':
+      case 'host-room':
+        // Simulate proper room state from React Native
+        const isFirstClient = !window.beemiTestRoomExists;
+        window.beemiTestRoomExists = true;
+        
+        response = {
+          type: 'room-joined',
+          messageId: payload.messageId,
+          data: {
+            roomId: 'test-room-123',
+            joinCode: 'ABC123',
+            gameId: payload.gameId || 'ping-demo',
+            playerId: 'Player-' + Math.random().toString(36).substr(2, 4),
+            isLeader: isFirstClient, // First client is leader, subsequent are peers
+            playerCount: isFirstClient ? 1 : 2,
+            maxPlayers: 4,
+            leaderId: isFirstClient ? 'Player-leader' : 'Player-leader',
+            players: isFirstClient ? ['Player-leader'] : ['Player-leader', 'Player-peer'],
+            sharedState: {}
+          }
+        };
+        break;
+        
+      case 'join-by-code':
+        response = {
+          type: 'room-joined',
+          messageId: payload.messageId,
+          data: {
+            roomId: 'test-room-' + payload.code,
+            joinCode: payload.code,
+            gameId: payload.gameId || 'ping-demo',
+            playerId: 'Player-' + Math.random().toString(36).substr(2, 4),
+            isLeader: false, // Joining by code is never leader initially
+            playerCount: 2,
+            maxPlayers: 4,
+            leaderId: 'Player-leader',
+            players: ['Player-leader', 'Player-peer'],
+            sharedState: {}
+          }
+        };
+        break;
+        
+      case 'mutex-acquire':
+        response = {
+          type: 'mutex-acquired',
+          messageId: payload.messageId,
+          data: {
+            key: payload.key,
+            success: true
+          }
+        };
+        break;
+        
+      case 'get-players':
+        response = {
+          type: 'players-list',
+          messageId: payload.messageId,
+          data: {
+            players: roomState?.players || ['Player-1', 'Player-2']
+          }
+        };
+        break;
+    }
+    
+    if (response) {
+      console.log('🔄 Simulated response:', response);
+      handleNativeMessage(response);
+    }
+  }, 500 + Math.random() * 500); // Random delay to simulate network
+}
+
+/* Initialize SDK */
+function initializeSDK() {
+  if (isInitialized) return;
+  
+  console.log('🚀 Initializing Beemi SDK...');
+  
+  // Listen for messages from React Native
+  if (window.ReactNativeWebView) {
+    window.addEventListener('message', (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type?.startsWith('beemi-') || message.type === 'room-state' || message.type === 'room-joined') {
+          handleNativeMessage(message);
+        }
+      } catch (error) {
+        console.error('Failed to parse RN message:', error);
+      }
+    });
+    
+    console.log('✅ React Native bridge connected');
+  } else {
+    console.log('🔄 Running in browser mode - using simulation');
+  }
+  
+  // Request initial room state if we're in an active room
+  sendToNative({
+    action: 'get-room-state'
+  });
+  
+  isInitialized = true;
+  emit('sdk-initialized');
+}
+
+/* Legacy compatibility */
 export const leaderboard = { 
   update: data => emit('__leaderboard__', data) 
 };
 
-// Expose globally for RN bridge
+// Convenience exports
+export const { quickPlay, host, joinByCode } = rooms;
+
+/* Global exposure for RN bridge and debugging */
 if (typeof window !== 'undefined') {
   window.beemi = { 
     on, 
     emit, 
+    rooms, 
+    crdt, 
+    mutex, 
     leaderboard,
-    rooms: { host, quickPlay, joinByCode },
-    crdt,
-    mutex,
-    sdk
+    quickPlay,
+    host,
+    joinByCode,
+    // Internal methods for RN bridge and debugging
+    _handleNativeMessage: handleNativeMessage,
+    _getRoomState: () => roomState,
+    _getCurrentRoom: () => currentRoom,
+    _sendToNative: sendToNative
   };
+  
+  // Auto-initialize when ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeSDK);
+  } else {
+    initializeSDK();
+  }
 } 
