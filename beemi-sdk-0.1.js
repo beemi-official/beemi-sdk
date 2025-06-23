@@ -541,7 +541,10 @@ function initializeSDK() {
     window.addEventListener('message', (event) => {
       try {
         const message = JSON.parse(event.data);
-        if (message.type?.startsWith('beemi-') || message.type === 'room-state' || message.type === 'room-joined') {
+        if (message.type?.startsWith('beemi-') || 
+            ['room-state', 'room-joined', 'room-created', 'player-joined', 'player-left', 
+             'leader-changed', 'room-event', 'crdt-update', 'mutex-acquired', 'mutex-released', 
+             'players-list', 'error'].includes(message.type)) {
           handleNativeMessage(message);
         }
       } catch (error) {
