@@ -197,6 +197,28 @@
         </div>
     </div>
 
+    <!-- TikTok Live Tests -->
+    <div class="container">
+        <h2>🎭 TikTok Live Integration</h2>
+        <div class="test-section">
+            <h3>TikTok Event Simulation</h3>
+            <button onclick="testTikTokComment()">Simulate Comment</button>
+            <button onclick="testTikTokGift()">Simulate Gift</button>
+            <button onclick="testTikTokLike()">Simulate Like</button>
+            <button onclick="testTikTokFollow()">Simulate Follow</button>
+            <button onclick="getViewerCount()">Get Viewer Count</button>
+            
+            <div style="margin-top: 10px;">
+                <input type="text" id="customComment" placeholder="Custom comment message" value="Hello from TikTok!" />
+                <button onclick="sendCustomComment()">Send Custom Comment</button>
+            </div>
+            
+            <div class="logs" id="tiktokLogs">
+                <div>TikTok event logs will appear here...</div>
+            </div>
+        </div>
+    </div>
+
     <!-- Test Logs -->
     <div class="container">
         <h2>📋 Test Logs</h2>
@@ -208,7 +230,7 @@
 
     <script type="module">
         // Import the SDK
-        import { host, quickPlay, joinByCode, crdt, mutex } from '../beemi-sdk-0.1.js';
+        import { host, quickPlay, joinByCode, crdt, mutex, tiktok } from '../beemi-sdk-0.1.js';
 
         // Global variables
         let currentRoom = null;
@@ -238,49 +260,88 @@
             simulateServerResponse(message) {
                 let response;
                 
-                switch (message.type) {
-                    case 'createRoom':
+                switch (message.action) {
+                    case 'host-room':
                         response = {
-                            type: 'roomCreated',
-                            roomId: 'room_' + Math.random().toString(36).substr(2, 9),
-                            joinCode: Math.random().toString(36).substr(2, 6).toUpperCase(),
-                            gameId: message.gameId,
-                            maxPlayers: message.maxPlayers,
-                            members: [{ id: 'player1' }],
-                            leaderId: 'player1'
+                            type: 'room-joined',
+                            messageId: message.messageId,
+                            data: {
+                                roomId: 'room_' + Math.random().toString(36).substr(2, 9),
+                                joinCode: Math.random().toString(36).substr(2, 6).toUpperCase(),
+                                gameId: message.gameId,
+                                playerId: 'Player-' + Math.random().toString(36).substr(2, 4),
+                                isLeader: true, // Host is always leader
+                                playerCount: 1,
+                                maxPlayers: message.options?.max || 4,
+                                leaderId: 'Player-leader',
+                                players: ['Player-leader'],
+                                sharedState: {}
+                            }
                         };
                         break;
-                    case 'quickPlay':
+                    case 'quick-play':
                         response = {
-                            type: 'roomJoined',
-                            roomId: 'room_' + Math.random().toString(36).substr(2, 9),
-                            joinCode: Math.random().toString(36).substr(2, 6).toUpperCase(),
-                            gameId: message.gameId,
-                            role: Math.random() > 0.5 ? 'leader' : 'peer',
-                            members: [{ id: 'player1' }, { id: 'player2' }],
-                            leaderId: 'player1'
+                            type: 'room-joined',
+                            messageId: message.messageId,
+                            data: {
+                                roomId: 'room_' + Math.random().toString(36).substr(2, 9),
+                                joinCode: Math.random().toString(36).substr(2, 6).toUpperCase(),
+                                gameId: message.gameId,
+                                playerId: 'Player-' + Math.random().toString(36).substr(2, 4),
+                                isLeader: Math.random() > 0.5, // Random leader assignment
+                                playerCount: 2,
+                                maxPlayers: message.options?.max || 4,
+                                leaderId: 'Player-leader',
+                                players: ['Player-leader', 'Player-peer'],
+                                sharedState: {}
+                            }
                         };
                         break;
-                    case 'joinByCode':
+                    case 'join-by-code':
                         response = {
-                            type: 'roomJoined',
-                            roomId: 'room_' + Math.random().toString(36).substr(2, 9),
-                            joinCode: message.joinCode,
-                            gameId: message.gameId,
-                            role: 'peer',
-                            members: [{ id: 'player1' }, { id: 'player2' }],
-                            leaderId: 'player1'
+                            type: 'room-joined',
+                            messageId: message.messageId,
+                            data: {
+                                roomId: 'room_' + message.code,
+                                joinCode: message.code,
+                                gameId: message.gameId,
+                                playerId: 'Player-' + Math.random().toString(36).substr(2, 4),
+                                isLeader: false, // Joining by code is never leader initially
+                                playerCount: 2,
+                                maxPlayers: 4,
+                                leaderId: 'Player-leader',
+                                players: ['Player-leader', 'Player-peer'],
+                                sharedState: {}
+                            }
                         };
                         break;
-                    case 'event':
-                        // Echo event back to simulate multiplayer
-                        response = message;
-                        break;
-                    case 'lock':
+                    case 'broadcast-event':
                         response = {
-                            type: 'lockAcquired',
-                            roomId: message.roomId,
-                            key: message.key
+                            type: 'room-event',
+                            messageId: message.messageId,
+                            data: {
+                                eventType: message.eventType,
+                                payload: message.payload
+                            }
+                        };
+                        break;
+                    case 'mutex-acquire':
+                        response = {
+                            type: 'mutex-acquired',
+                            messageId: message.messageId,
+                            data: {
+                                key: message.key,
+                                success: true
+                            }
+                        };
+                        break;
+                    case 'get-players':
+                        response = {
+                            type: 'players-list',
+                            messageId: message.messageId,
+                            data: {
+                                players: ['Player-1', 'Player-2']
+                            }
                         };
                         break;
                 }
@@ -468,14 +529,17 @@
                 return;
             }
 
-            // Simulate receiving an event
+            // Simulate receiving an event by directly calling the SDK's message handler
             setTimeout(() => {
-                currentRoom.handleMessage({
-                    type: 'event',
-                    roomId: currentRoom.id,
-                    eventType: 'chat',
-                    payload: { message: 'Auto test message', sender: 'system' }
-                });
+                if (window.beemi && window.beemi._handleNativeMessage) {
+                    window.beemi._handleNativeMessage({
+                        type: 'room-event',
+                        data: {
+                            eventType: 'chat',
+                            payload: { message: 'Auto test message', sender: 'system' }
+                        }
+                    });
+                }
             }, 500);
 
             log('🔄 Auto event test triggered', 'info');
@@ -513,13 +577,16 @@
                 return;
             }
 
-            // Simulate becoming leader
-            currentRoom.handleMessage({
-                type: 'roleChange',
-                roomId: currentRoom.id,
-                newLeader: 'player2',
-                memberId: 'player2'
-            });
+            // Simulate leadership change by directly calling the SDK's message handler
+            if (window.beemi && window.beemi._handleNativeMessage) {
+                window.beemi._handleNativeMessage({
+                    type: 'leader-changed',
+                    data: {
+                        newLeaderId: currentRoom.playerId, // Make current player the leader
+                        roomId: currentRoom.id
+                    }
+                });
+            }
 
             log('🔄 Simulated leader change', 'info');
             updateRoomInfo(currentRoom);
@@ -626,18 +693,172 @@
             }
         };
 
+        // TikTok Functions
+        function setupTikTokListeners() {
+            // Set up TikTok event listeners
+            tiktok.onComment((data) => {
+                logToSection('tiktokLogs', `💬 Comment: "${data.message}" from @${data.user.username}`);
+                log(`💬 TikTok comment from ${data.user.username}`, 'info');
+            });
+            
+            tiktok.onGift((data) => {
+                logToSection('tiktokLogs', `🎁 Gift: ${data.gift.count}x ${data.gift.name} from @${data.user.username}`);
+                log(`🎁 TikTok gift received!`, 'success');
+            });
+            
+            tiktok.onLike((data) => {
+                logToSection('tiktokLogs', `❤️ ${data.count} likes from @${data.user.username}`);
+                log(`❤️ TikTok likes received!`, 'info');
+            });
+            
+            tiktok.onFollow((data) => {
+                logToSection('tiktokLogs', `👥 New follower: @${data.user.username}`);
+                log(`👥 New TikTok follower!`, 'success');
+            });
+            
+            tiktok.onViewerJoin((data) => {
+                logToSection('tiktokLogs', `👋 Viewer joined: @${data.user.username}`);
+                log(`👋 New TikTok viewer joined`, 'info');
+            });
+            
+            tiktok.onViewerCountChange((data) => {
+                logToSection('tiktokLogs', `📊 Viewer count: ${data.count}`);
+                log(`📊 TikTok viewers: ${data.count}`, 'info');
+            });
+            
+            // Universal message listener
+            tiktok.onMessage((data) => {
+                logToSection('tiktokLogs', `📨 ${data.type.toUpperCase()}: ${JSON.stringify(data, null, 2)}`);
+            });
+        }
+
+        window.testTikTokComment = function() {
+            if (window.beemi && window.beemi._simulateTikTokEvents) {
+                window.beemi._handleNativeMessage({
+                    type: 'tiktok-comment',
+                    data: {
+                        id: 'comment_test_' + Date.now(),
+                        user: {
+                            id: 'user_test',
+                            username: 'TestUser123',
+                            avatar: 'https://via.placeholder.com/50'
+                        },
+                        message: 'This is an amazing game!',
+                        timestamp: Date.now()
+                    }
+                });
+            }
+            log('🎭 Simulated TikTok comment', 'info');
+        };
+
+        window.testTikTokGift = function() {
+            if (window.beemi && window.beemi._handleNativeMessage) {
+                window.beemi._handleNativeMessage({
+                    type: 'tiktok-gift',
+                    data: {
+                        id: 'gift_test_' + Date.now(),
+                        user: {
+                            id: 'user_gifter',
+                            username: 'GiftMaster99'
+                        },
+                        gift: {
+                            id: 'rose',
+                            name: 'Rose',
+                            value: 1,
+                            count: 5
+                        },
+                        timestamp: Date.now()
+                    }
+                });
+            }
+            log('🎁 Simulated TikTok gift', 'success');
+        };
+
+        window.testTikTokLike = function() {
+            if (window.beemi && window.beemi._handleNativeMessage) {
+                window.beemi._handleNativeMessage({
+                    type: 'tiktok-like',
+                    data: {
+                        user: {
+                            id: 'user_liker',
+                            username: 'LikeMachine'
+                        },
+                        count: Math.floor(Math.random() * 20) + 1,
+                        timestamp: Date.now()
+                    }
+                });
+            }
+            log('❤️ Simulated TikTok likes', 'info');
+        };
+
+        window.testTikTokFollow = function() {
+            if (window.beemi && window.beemi._handleNativeMessage) {
+                window.beemi._handleNativeMessage({
+                    type: 'tiktok-follow',
+                    data: {
+                        user: {
+                            id: 'user_follower',
+                            username: 'NewFollower' + Math.floor(Math.random() * 1000)
+                        },
+                        timestamp: Date.now()
+                    }
+                });
+            }
+            log('👥 Simulated TikTok follow', 'success');
+        };
+
+        window.getViewerCount = async function() {
+            try {
+                const count = await tiktok.getViewerCount();
+                logToSection('tiktokLogs', `📊 Current viewer count: ${count}`);
+                log(`📊 Retrieved viewer count: ${count}`, 'success');
+            } catch (error) {
+                log(`❌ Failed to get viewer count: ${error.message}`, 'error');
+            }
+        };
+
+        window.sendCustomComment = function() {
+            const message = document.getElementById('customComment').value;
+            if (!message) {
+                log('❌ Please enter a comment message', 'error');
+                return;
+            }
+
+            if (window.beemi && window.beemi._handleNativeMessage) {
+                window.beemi._handleNativeMessage({
+                    type: 'tiktok-comment',
+                    data: {
+                        id: 'comment_custom_' + Date.now(),
+                        user: {
+                            id: 'user_custom',
+                            username: 'CustomUser',
+                            avatar: 'https://via.placeholder.com/50'
+                        },
+                        message: message,
+                        timestamp: Date.now()
+                    }
+                });
+            }
+            log(`💬 Sent custom TikTok comment: "${message}"`, 'success');
+        };
+
         // Utility Functions
         window.clearLogs = function() {
             document.getElementById('mainLogs').innerHTML = '<div>Main test logs will appear here...</div>';
             document.getElementById('eventLogs').innerHTML = '<div>Event logs will appear here...</div>';
             document.getElementById('crdtLogs').innerHTML = '<div>CRDT logs will appear here...</div>';
             document.getElementById('mutexLogs').innerHTML = '<div>Mutex logs will appear here...</div>';
+            document.getElementById('tiktokLogs').innerHTML = '<div>TikTok event logs will appear here...</div>';
             log('🧹 All logs cleared', 'info');
         };
 
         // Initialize
         log('🚀 Beemi SDK Test Suite initialized', 'success');
         log('💡 Start by creating or joining a room', 'info');
+        
+        // Set up TikTok listeners
+        setupTikTokListeners();
+        log('🎭 TikTok Live integration ready', 'success');
     </script>
 </body>
 </html> 

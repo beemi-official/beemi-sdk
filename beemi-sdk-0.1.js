@@ -18,11 +18,11 @@ let messageId = 0;
 let pendingCallbacks = new Map();
 
 /* Core event system */
-export function on(type, cb) { 
+function on(type, cb) { 
   (listeners[type] ||= []).push(cb); 
 }
 
-export function emit(type, data) { 
+function emit(type, data) { 
   (listeners[type] || []).forEach(f => f(data)); 
 }
 
@@ -161,7 +161,7 @@ function updateRoomState(newState) {
 }
 
 /* Room Management API */
-export const rooms = {
+const rooms = {
   async quickPlay(gameId, options = {}) {
     return new Promise((resolve, reject) => {
       console.log('🎮 QuickPlay request:', gameId, options);
@@ -363,7 +363,7 @@ function createRoomObject(state) {
 }
 
 /* CRDT (Shared State) Management */
-export const crdt = {
+const crdt = {
   get(key) {
     const value = roomState?.sharedState?.[key];
     console.log(`📖 CRDT get: ${key} = ${value}`);
@@ -400,7 +400,7 @@ export const crdt = {
 };
 
 /* Mutex (Distributed Locking) */
-export const mutex = {
+const mutex = {
   async exec(key, ttl, callback) {
     console.log(`🔒 Mutex acquire: ${key} (ttl: ${ttl}ms)`);
     
@@ -557,6 +557,18 @@ function initializeSDK() {
     console.log('🔄 Running in browser mode - using simulation');
   }
   
+  // Process any pending messages that were queued before SDK initialization
+  if (window.pendingMessages && Array.isArray(window.pendingMessages)) {
+    console.log(`📥 Processing ${window.pendingMessages.length} queued messages...`);
+    window.pendingMessages.forEach((message, index) => {
+      console.log(`📥 Processing queued message ${index + 1}:`, message);
+      handleNativeMessage(message);
+    });
+    // Clear the queue
+    window.pendingMessages = [];
+    console.log('✅ All queued messages processed');
+  }
+  
   // Request initial room state if we're in an active room
   sendToNative({
     action: 'get-room-state'
@@ -564,15 +576,22 @@ function initializeSDK() {
   
   isInitialized = true;
   emit('sdk-initialized');
+  
+  // Notify React Native that SDK is ready
+  if (window.ReactNativeWebView) {
+    console.log('📤 [SDK] Sending ready message to React Native...');
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'beemi',
+      action: 'ready',
+      timestamp: Date.now()
+    }));
+  }
 }
 
 /* Legacy compatibility */
-export const leaderboard = { 
+const leaderboard = { 
   update: data => emit('__leaderboard__', data) 
 };
-
-// Convenience exports
-export const { quickPlay, host, joinByCode } = rooms;
 
 /* Global exposure for RN bridge and debugging */
 if (typeof window !== 'undefined') {
@@ -583,9 +602,10 @@ if (typeof window !== 'undefined') {
     crdt, 
     mutex, 
     leaderboard,
-    quickPlay,
-    host,
-    joinByCode,
+    // Convenience shortcuts to rooms methods
+    quickPlay: rooms.quickPlay.bind(rooms),
+    host: rooms.host.bind(rooms),
+    joinByCode: rooms.joinByCode.bind(rooms),
     // Internal methods for RN bridge and debugging
     _handleNativeMessage: handleNativeMessage,
     _getRoomState: () => roomState,
