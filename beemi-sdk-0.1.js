@@ -74,7 +74,7 @@ function handleNativeMessage(message) {
       }
       break;
     case 'room-event':
-      emit(message.data.eventType, message.data.payload);
+      emit('room-event', message.data);
       break;
     case 'crdt-update':
       if (roomState && roomState.sharedState) {
