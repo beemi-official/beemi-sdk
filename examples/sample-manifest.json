@@ -1,0 +1,39 @@
+{
+  "name": "Sample Trivia Game",
+  "id": "sample-trivia-123",
+  "version": "1.0.0",
+  "description": "A sample trivia game with multiplayer and streaming features",
+  "category": "trivia",
+  "main": "index.html",
+  "beemi": {
+    "sdkVersion": "2.0.0",
+    "core": {
+      "required": true,
+      "features": ["events", "bridge", "logging"]
+    },
+    "multiplayer": {
+      "required": true,
+      "features": ["rooms", "crdt", "mutex", "leadership"],
+      "config": {
+        "maxPlayers": 6,
+        "visibility": "public",
+        "persistState": true
+      }
+    },
+    "streams": {
+      "required": true,
+      "platforms": ["tiktok", "youtube", "twitch"],
+      "features": ["chat", "gifts", "likes", "follows", "viewers"],
+      "eventTypes": ["chat", "gift", "like", "follow", "join", "leave"]
+    },
+    "devtools": {
+      "required": true,
+      "enableInProduction": false,
+      "features": ["debug", "mock", "inspector", "network"]
+    }
+  },
+  "development": {
+    "emulatorPath": "/development/emulator/",
+    "postCreate": "npm install"
+  }
+} 
