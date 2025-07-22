@@ -8,29 +8,19 @@
   "beemi": {
     "sdkVersion": "2.0.0",
     "core": {
-      "required": true,
-      "features": ["events", "bridge", "logging"]
+      "required": true
     },
-    "multiplayer": {
+    "multiplayer-p2p": {
       "required": true,
-      "features": ["rooms", "crdt", "mutex", "leadership"],
       "config": {
         "maxPlayers": 6,
         "visibility": "public",
         "persistState": true
       }
     },
-    "streams": {
-      "required": true,
-      "platforms": ["tiktok", "youtube", "twitch"],
-      "features": ["chat", "gifts", "likes", "follows", "viewers"],
-      "eventTypes": ["chat", "gift", "like", "follow", "join", "leave"]
-    },
-    "devtools": {
-      "required": true,
-      "enableInProduction": false,
-      "features": ["debug", "mock", "inspector", "network"]
-    }
+                    "streams": {
+          "required": true
+        }
   },
   "development": {
     "emulatorPath": "/development/emulator/",

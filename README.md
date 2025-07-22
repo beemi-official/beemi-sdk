@@ -15,7 +15,7 @@ The Beemi SDK has been completely rewritten with a modular architecture that loa
 ### Modular Design
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Core Module   │────▶│ Multiplayer      │────▶│   DevTools      │
+│   Core Module   │────▶│ Multiplayer P2P  │────▶│   DevTools      │
 │                 │     │ Module           │     │ Module          │
 │ • Event System  │     │ • Rooms          │     │ • Debug Tools   │
 │ • React Native  │     │ • CRDT           │     │ • Mock Data     │
@@ -48,12 +48,20 @@ The Beemi SDK has been completely rewritten with a modular architecture that loa
 ### 1. Create New Project
 ```bash
 npx beemi-cli create my-game
-# ✨ Interactive prompts:
-# - Enable P2P Multiplayer? (y/N)
-# - Enable Live Streaming? (Y/n)
+# ✨ Interactive module selection:
+# ☐ Multiplayer (P2P) - rooms, shared state, leadership
+# ☑ Live Streaming - TikTok, YouTube, Twitch integration
 ```
 
-### 2. Manifest Configuration
+### 2. Manage Modules
+```bash
+# In existing project directory
+npx beemi-cli modules
+# ✨ Add/remove modules or upgrade legacy projects
+# 🔄 Automatically detects project type and current modules
+```
+
+### 3. Manifest Configuration
 Your `manifest.json` automatically includes:
 ```json
 {
@@ -61,13 +69,10 @@ Your `manifest.json` automatically includes:
   "beemi": {
     "sdkVersion": "2.0.0",
     "core": {
-      "required": true,
-      "features": ["events", "bridge", "logging"]
+      "required": true
     },
     "streams": {
-      "required": true,
-      "platforms": ["tiktok", "youtube", "twitch"],
-      "features": ["chat", "gifts", "likes", "follows", "viewers"]
+      "required": true
     }
   }
 }
@@ -78,14 +83,16 @@ Your `manifest.json` automatically includes:
 // SDK is automatically injected based on manifest
 console.log('Available modules:', beemi.getLoadedModules());
 
-// Core functionality (always available)
-beemi.on('stream-chat', (data) => {
-  console.log(`${data.user.username}: ${data.message}`);
-});
+// Streaming functionality (if enabled)
+if (beemi.streams) {
+  beemi.streams.onChat((data) => {
+    console.log(`${data.user.username}: ${data.message}`);
+  });
+}
 
 // Multiplayer (if enabled)
-if (beemi.room) {
-  const room = await beemi.room.host('my-game');
+if (beemi.multiplayer) {
+  const room = await beemi.multiplayer.room.host('my-game');
   console.log('Room created:', room.joinCode);
 }
 
@@ -104,10 +111,10 @@ if (beemi.tiktok) {
 **Always Required** - Foundation for all other modules
 
 ```typescript
-// Event System
-beemi.on(event: string, callback: Function): void
-beemi.off(event: string, callback: Function): void
-beemi.emit(event: string, data: any): void
+// Event System (Internal APIs - use module-specific handlers)
+// beemi.on/off/emit are for internal use only
+
+// Public utilities
 
 // React Native Bridge
 beemi.isReady(): boolean
@@ -118,7 +125,7 @@ beemi.log(level: 'info' | 'error' | 'debug', message: string): void
 beemi.setLogLevel(level: string): void
 ```
 
-### Multiplayer Module
+### Multiplayer (P2P) Module
 **Optional** - P2P multiplayer functionality
 
 ```typescript
@@ -204,7 +211,7 @@ testUser.simulate(); // Generates random events
       "required": true,
       "features": ["events", "bridge", "logging"]
     },
-    "multiplayer": {
+    "multiplayer-p2p": {
       "required": false,
       "features": ["rooms", "crdt", "mutex", "leadership"],
       "config": {
@@ -214,15 +221,11 @@ testUser.simulate(); // Generates random events
       }
     },
     "streams": {
-      "required": false,
-      "platforms": ["tiktok", "youtube", "twitch"],
-      "features": ["chat", "gifts", "likes", "follows", "viewers"],
-      "eventTypes": ["chat", "gift", "like", "follow", "join", "leave"]
+      "required": false
     },
     "devtools": {
       "required": true,
-      "enableInProduction": false,
-      "features": ["debug", "mock", "inspector", "network"]
+      "enableInProduction": false
     }
   }
 }
@@ -258,8 +261,8 @@ To migrate an existing game to modular SDK:
 {
   "beemi": {
     "sdkVersion": "2.0.0",
-    "core": { "required": true, "features": ["events", "bridge", "logging"] },
-    "streams": { "required": true, "platforms": ["tiktok"] }
+    "core": { "required": true },
+    "streams": { "required": true }
   }
 }
 ```
@@ -361,19 +364,17 @@ if (beemi.tiktok) {
 
 ### Error Handling
 ```javascript
-// Global error handling
-beemi.on('sdk-error', (error) => {
-  console.error('SDK Error:', error);
-});
+// Module-specific error handling
+if (beemi.streams) {
+  // Use module-specific error handlers when available
+  // For streams: handle errors via module callbacks
+}
 
-// Module-specific errors
-beemi.on('multiplayer-error', (error) => {
-  console.error('Multiplayer Error:', error);
-});
+if (beemi.multiplayer) {
+  // For multiplayer: handle errors via module callbacks  
+}
 
-beemi.on('stream-error', (error) => {
-  console.error('Streaming Error:', error);
-});
+// Note: beemi.on() error handlers are internal APIs
 ```
 
 ### Custom Event Types
@@ -384,13 +385,15 @@ interface GameEvents {
   'game-ended': { winner: string; duration: number };
 }
 
-// Emit custom events
-beemi.emit('player-scored', { playerId: 'player123', points: 100 });
-
-// Listen with types
-beemi.on('player-scored', (data: GameEvents['player-scored']) => {
-  console.log(`Player ${data.playerId} scored ${data.points} points!`);
-});
+// Custom game events should use module-specific patterns
+// For multiplayer events:
+if (beemi.multiplayer) {
+  // Use CRDT for shared game state instead of events
+  beemi.multiplayer.crdt.set('player-scores', { 
+    playerId: 'player123', 
+    points: 100 
+  });
+}
 ```
 
 ## 📚 API Reference

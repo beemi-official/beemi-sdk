@@ -502,7 +502,7 @@ export function createMultiplayerModule(config = {}) {
       this.core.on('crdt-update', this.crdt.handleUpdate.bind(this.crdt));
       this.core.on('leader-changed', this.leadership.handleLeaderChange.bind(this.leadership));
       
-      this.core.log('info', 'Beemi Multiplayer SDK initialized', {
+              this.core.log('info', 'Beemi Multiplayer (P2P) SDK initialized', {
         version: this.version,
         roomConfig: this.roomConfig
       });

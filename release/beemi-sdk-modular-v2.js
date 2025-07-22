@@ -1,7 +1,7 @@
 /**
  * Beemi Modular SDK v2.0 - Complete Bundle
  * This file combines all SDK modules into a single script for CDN serving
- * Can be loaded via: https://cdn.jsdelivr.net/gh/your-repo/beemi-sdk/release/beemi-sdk-modular-v2.js
+ * Can be loaded via: https://cdn.jsdelivr.net/gh/beemi-official/beemi-sdk@modular/release/beemi-sdk-modular-v2.js
  */
 
 (function() {
@@ -411,7 +411,7 @@
           this.leadership.handleLeaderChange(data);
         });
         
-        this.core.log('info', 'Beemi Multiplayer SDK initialized', {
+        this.core.log('info', 'Beemi Multiplayer (P2P) SDK initialized', {
           version: this.version,
           roomConfig: this.roomConfig
         });
@@ -444,7 +444,7 @@
   
   // ===== STREAMS MODULE =====
   function createStreamsModule(config = {}) {
-    const platforms = config.platforms || ['tiktok', 'youtube', 'twitch'];
+    const platforms = ['tiktok', 'youtube', 'twitch']; // Always support all platforms
     
     const streamsModule = {
       version: '2.0.0',
@@ -539,7 +539,11 @@
       
       // Event handling shortcuts
       onChat(callback) {
-        return this.core.on('stream-chat', callback);
+        console.log('🎯 [Streams] Registering onChat handler');
+        return this.core.on('stream-chat', (data) => {
+          console.log('📺 [Streams] stream-chat event received:', data);
+          callback(data);
+        });
       },
       
       onGift(callback) {
@@ -579,10 +583,12 @@
       init(coreModule) {
         this.core = coreModule;
         
+        console.log('🎬 [Streams] Module initializing with core:', !!coreModule);
         this.core.log('info', 'Beemi Streams SDK initialized', {
           version: this.version,
           platforms: this.platforms
         });
+        console.log('✅ [Streams] Module fully initialized');
       },
       
       // Public API methods
@@ -602,80 +608,6 @@
     return streamsModule;
   }
   
-  // ===== DEVTOOLS MODULE =====
-  function createDevToolsModule(config = {}) {
-    const enableInProduction = config.enableInProduction || false;
-    
-    const devToolsModule = {
-      version: '2.0.0',
-      enableInProduction,
-      debug: config.debug || false,
-      
-      get shouldEnable() {
-        const isDevelopment = this.debug || window.location.href.includes('localhost');
-        return isDevelopment || this.enableInProduction;
-      },
-      
-      // Mock data generators
-      mock: {
-        streamEvents: {
-          simulateChat(username, message) {
-            const chatData = {
-              user: {
-                id: 'mock_' + Date.now(),
-                username: username || 'MockUser',
-                displayName: username || 'Mock User'
-              },
-              message: message || 'This is a mock chat message!'
-            };
-            devToolsModule.core.emit('stream-chat', chatData);
-          },
-          
-          simulateGift(username, gift) {
-            const giftData = {
-              user: {
-                id: 'mock_' + Date.now(),
-                username: username || 'MockGifter'
-              },
-              gift: gift || {
-                id: 'rose',
-                name: 'Rose',
-                value: 10
-              }
-            };
-            devToolsModule.core.emit('stream-gift', giftData);
-          }
-        }
-      },
-      
-      // Initialization
-      init(coreModule) {
-        this.core = coreModule;
-        
-        if (!this.shouldEnable) {
-          this.core.log('info', 'DevTools disabled in production');
-          return;
-        }
-        
-        this.core.log('info', 'Beemi DevTools SDK initialized', {
-          version: this.version,
-          enabled: this.shouldEnable
-        });
-      },
-      
-      // Public API methods
-      debug: {
-        simulateChat: (username, message) => {
-          if (devToolsModule.shouldEnable && devToolsModule.mock) {
-            devToolsModule.mock.streamEvents.simulateChat(username, message);
-          }
-        }
-      }
-    };
-    
-    return devToolsModule;
-  }
-  
   // ===== MODULAR SDK INITIALIZER =====
   window.initBeemiModularSDK = function(config = {}) {
     try {
@@ -690,17 +622,15 @@
       window.BeemiModules.core = coreModule;
       
       // Create conditional modules
-      if (config.multiplayer?.required) {
-        window.BeemiModules.multiplayer = createMultiplayerModule(config.multiplayer);
+      if (config['multiplayer-p2p']?.required) {
+        window.BeemiModules.multiplayer = createMultiplayerModule(config['multiplayer-p2p']);
       }
       
       if (config.streams?.required) {
         window.BeemiModules.streams = createStreamsModule(config.streams);
       }
       
-      if (config.devtools?.required) {
-        window.BeemiModules.devtools = createDevToolsModule(config.devtools);
-      }
+
       
       // Initialize modules
       coreModule.init();
@@ -713,43 +643,73 @@
         window.BeemiModules.streams.init(coreModule);
       }
       
-      if (window.BeemiModules.devtools) {
-        window.BeemiModules.devtools.init(coreModule);
+
+      
+      // Set up React Native message handling with backward compatibility
+      if (window.ReactNativeWebView) {
+        window.addEventListener('message', (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            
+            // Process all messages with a type
+            if (message.type) {
+              console.log('📩 [Modular SDK] Processing message:', message.type, message.data);
+              
+              // Emit modular event
+              coreModule.emit(message.type, message.data || message);
+              console.log('✅ [Modular SDK] Event emitted to core');
+              
+              // Backward compatibility: Also emit legacy events for old games
+              if (message.type === 'stream-chat') {
+                // Convert stream-chat to legacy room-event format
+                const legacyData = {
+                  eventType: 'tiktok-chat',
+                  payload: {
+                    type: 'chat',
+                    text: message.data.text,
+                    user: message.data.user.username,
+                    ts: message.data.timestamp,
+                    imageUrl: message.data.imageUrl
+                  }
+                };
+                coreModule.emit('room-event', legacyData);
+                console.log('🔄 [Legacy Compat] Emitted room-event for stream-chat');
+              }
+            }
+            
+          } catch (error) {
+            console.error('❌ [Modular SDK] Failed to parse RN message:', error);
+          }
+        });
+        
+        console.log('✅ [Modular SDK] React Native message listener initialized with legacy compatibility');
       }
       
-      // Create unified SDK interface
+      // Create unified SDK interface - True Modular Structure
       window.beemi = {
         version: '2.0.0',
-        modules: window.BeemiModules,
         config: config,
         
-        // Core methods
-        on: coreModule.on.bind(coreModule),
-        off: coreModule.off.bind(coreModule),
-        emit: coreModule.emit.bind(coreModule),
+        // Public utilities (always available)
         isReady: coreModule.isReady.bind(coreModule),
-        log: coreModule.log.bind(coreModule),
         
-        // Conditional features
+        // Core module (internal functions)
+        core: {
+          on: coreModule.on.bind(coreModule),
+          off: coreModule.off.bind(coreModule),
+          emit: coreModule.emit.bind(coreModule),
+          log: coreModule.log.bind(coreModule),
+          setLogLevel: coreModule.setLogLevel.bind(coreModule),
+          getBridgeInfo: coreModule.getBridgeInfo.bind(coreModule)
+        },
+        
+        // Feature modules (when enabled)
         ...(window.BeemiModules.multiplayer && {
-          room: window.BeemiModules.multiplayer.room,
-          crdt: window.BeemiModules.multiplayer.crdt,
-          mutex: window.BeemiModules.multiplayer.mutex,
-          ifLeader: window.BeemiModules.multiplayer.ifLeader.bind(window.BeemiModules.multiplayer),
-          isLeader: window.BeemiModules.multiplayer.isLeader.bind(window.BeemiModules.multiplayer)
+          multiplayer: window.BeemiModules.multiplayer
         }),
         
         ...(window.BeemiModules.streams && {
-          streams: window.BeemiModules.streams,
-          onChat: window.BeemiModules.streams.onChat.bind(window.BeemiModules.streams),
-          onGift: window.BeemiModules.streams.onGift.bind(window.BeemiModules.streams),
-          onLike: window.BeemiModules.streams.onLike.bind(window.BeemiModules.streams),
-          onFollow: window.BeemiModules.streams.onFollow.bind(window.BeemiModules.streams)
-        }),
-        
-        ...(window.BeemiModules.devtools && {
-          debug: window.BeemiModules.devtools.debug,
-          mock: window.BeemiModules.devtools.mock
+          streams: window.BeemiModules.streams
         })
       };
       

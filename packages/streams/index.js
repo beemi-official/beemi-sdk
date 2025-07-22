@@ -5,7 +5,7 @@
  */
 
 export function createStreamsModule(config = {}) {
-  const platforms = config.platforms || ['tiktok', 'youtube', 'twitch'];
+  const platforms = ['tiktok', 'youtube', 'twitch']; // Always support all platforms
   
   const streamsModule = {
     version: '2.0.0',

@@ -10,9 +10,8 @@ export interface BaseEvent {
 // SDK Module Configuration Types
 export interface SDKModuleManifest {
   core: CoreModuleConfig;
-  multiplayer?: MultiplayerModuleConfig;
+  'multiplayer-p2p'?: MultiplayerP2PModuleConfig;
   streams?: StreamsModuleConfig;
-  devtools?: DevToolsModuleConfig;
 }
 
 // Core Module (Always Required)
@@ -40,8 +39,8 @@ export interface BridgeInfo {
   version: string;
 }
 
-// Multiplayer Module
-export interface MultiplayerModuleConfig {
+// Multiplayer P2P Module  
+export interface MultiplayerP2PModuleConfig {
   required: boolean;
   config?: {
     maxPlayers?: number;
@@ -177,7 +176,6 @@ export interface MultiplayerSDK {
 // Streams Module
 export interface StreamsModuleConfig {
   required: boolean;
-  platforms: ('tiktok' | 'youtube' | 'twitch')[];
 }
 
 export interface StreamEvent extends BaseEvent {
@@ -286,11 +284,7 @@ export interface StreamsSDK {
   getStreamInfo(): Promise<StreamInfo>;
 }
 
-// DevTools Module
-export interface DevToolsModuleConfig {
-  required: boolean;
-  enableInProduction: boolean;
-}
+
 
 export interface TestUser {
   id: string;
@@ -321,46 +315,13 @@ export interface NetworkMonitor {
   getStats(): any;
 }
 
-export interface DevToolsSDK {
-  // Debug utilities
-  debug: {
-    setLogLevel(level: 'verbose' | 'normal' | 'quiet'): void;
-    inspectEvents(): EventInspector;
-    getSDKState(): any;
-  };
-  
-  // Mock data generators
-  mock: {
-    streamEvents: {
-      simulateChat(username: string, message: string): void;
-      simulateGift(username: string, gift: any): void;
-      simulateLike(username: string, count: number): void;
-      simulateFollow(username: string): void;
-    };
-    multiplayerEvents: {
-      simulatePlayerJoin(playerId: string): void;
-      simulatePlayerLeave(playerId: string): void;
-      simulateLeaderChange(newLeaderId: string): void;
-    };
-  };
-  
-  // Network monitoring
-  network: NetworkMonitor;
-  
-  // Testing utilities
-  test: {
-    simulateUser(username: string): TestUser;
-    simulateRoom(playerCount: number): TestRoom;
-    simulateStream(platform: string): TestStream;
-  };
-}
+
 
 // Conditional SDK Types based on manifest
 export type BeemiSDK<T extends SDKModuleManifest> = 
   CoreSDK & 
-  (T['multiplayer'] extends { required: true } ? MultiplayerSDK : {}) &
-  (T['streams'] extends { required: true } ? StreamsSDK : {}) &
-  (T['devtools'] extends { required: true } ? DevToolsSDK : {});
+  (T['multiplayer-p2p'] extends { required: true } ? MultiplayerSDK : {}) &
+  (T['streams'] extends { required: true } ? StreamsSDK : {});
 
 // Module loader types
 export interface ModuleLoadResult {
