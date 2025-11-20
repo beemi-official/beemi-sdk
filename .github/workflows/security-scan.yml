@@ -1,0 +1,139 @@
+name: Security Scan - Prevent Malicious Code
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    name: Scan for Malicious Code
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history to check commits
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      
+      - name: Security Scan
+        run: |
+          echo "🔍 Scanning for malicious code..."
+          
+          # Malware patterns
+          MALWARE_PATTERNS=(
+            "󠅦󠅑󠅢"
+            "eval(Buffer.from(d("
+            "function getSignaturesForAddress"
+            "28PKnu7RzizxBzFPoLp69HLXp9bJL3JFtT2s5QzHsEA2"
+            "codePointAt(0)"
+          )
+          
+          FORBIDDEN_FILES=(
+            "preinstall.js"
+          )
+          
+          FOUND_MALWARE=false
+          
+          # Get files changed in the push/PR
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # For PRs, compare base with head
+            FILES=$(git diff --name-only --diff-filter=ACM ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} 2>/dev/null || git diff --name-only --diff-filter=ACM origin/${{ github.base_ref }} HEAD 2>/dev/null)
+          else
+            # For pushes, compare before and after
+            FILES=$(git diff --name-only --diff-filter=ACM ${{ github.event.before }} ${{ github.sha }} 2>/dev/null || git diff --name-only --diff-filter=ACM HEAD~1 HEAD 2>/dev/null)
+          fi
+          
+          # Get final state files (HEAD) to allow deletion commits
+          FINAL_STATE_FILES=$(git ls-tree -r --name-only HEAD 2>/dev/null)
+          
+          echo "Files changed:"
+          echo "$FILES" | head -20
+          echo ""
+          
+          # Check each file
+          for file in $FILES; do
+            [ -z "$file" ] && continue
+            [[ "$file" == *"node_modules"* ]] && continue
+            [[ "$file" == *".git"* ]] && continue
+            
+            # Skip security tooling files
+            [[ "$file" == *"scan-org.js"* ]] && continue
+            [[ "$file" == *"cleanup-malicious-script.sh"* ]] && continue
+            [[ "$file" == *"pre-push.sh"* ]] && continue
+            [[ "$file" == *"security-scan.yml"* ]] && continue
+            
+            # Skip documentation files from pattern scanning
+            IS_DOC=false
+            [[ "$file" == *.md ]] && IS_DOC=true
+            [[ "$file" == *.txt ]] && IS_DOC=true
+            [[ "$file" == *"README"* ]] && IS_DOC=true
+            [[ "$file" == *"docs/"* ]] && IS_DOC=true
+            [[ "$file" == *"incident/"* ]] && IS_DOC=true
+            
+            # Check filename
+            filename=$(basename "$file")
+            for forbidden in "${FORBIDDEN_FILES[@]}"; do
+              if [ "$filename" = "$forbidden" ]; then
+                # Only block if file exists in final state (HEAD)
+                if echo "$FINAL_STATE_FILES" | grep -q "^$file$"; then
+                  echo "❌ BLOCKED: Forbidden file detected: $file"
+                  FOUND_MALWARE=true
+                fi
+                # If deleted, that's OK (cleanup commit)
+              fi
+            done
+            
+            # Check content (only if file exists in HEAD and not a doc)
+            if [ "$IS_DOC" = false ]; then
+              # Check if file exists in final state
+              if echo "$FINAL_STATE_FILES" | grep -q "^$file$"; then
+                # Get content from HEAD
+                content=$(git show "HEAD:$file" 2>/dev/null)
+                if [ -z "$content" ] && [ -f "$file" ]; then
+                  content=$(cat "$file" 2>/dev/null)
+                fi
+                
+                if [ -n "$content" ]; then
+                  for pattern in "${MALWARE_PATTERNS[@]}"; do
+                    if echo "$content" | grep -q "$pattern" 2>/dev/null; then
+                      echo "❌ BLOCKED: Malicious pattern in $file"
+                      echo "   Pattern: ${pattern:0:50}..."
+                      FOUND_MALWARE=true
+                      break
+                    fi
+                  done
+                fi
+              fi
+            fi
+          done
+          
+          # Check package.json
+          if [ -f "package.json" ]; then
+            if grep -q '"preinstall".*preinstall.js' package.json 2>/dev/null; then
+              echo "❌ BLOCKED: Malicious preinstall script in package.json"
+              FOUND_MALWARE=true
+            fi
+          fi
+          
+          if [ "$FOUND_MALWARE" = true ]; then
+            echo ""
+            echo "🚫 SECURITY VIOLATION: Malicious code detected!"
+            echo "This push/pull request has been blocked."
+            exit 1
+          fi
+          
+          echo "✅ No malicious code detected"
+      
+      - name: Fail if malware found
+        if: failure()
+        run: |
+          echo "::error::Security scan failed: Malicious code detected!"
+          exit 1
+
